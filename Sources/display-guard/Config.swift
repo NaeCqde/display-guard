@@ -23,15 +23,23 @@ struct Config {
         var sunshine_address: String?
     }
 
+    struct Display: Codable {
+        var vendor: Int          // EDID vendor id
+        var model: Int           // EDID product code
+    }
+
     struct Timing: Codable {
         var poll_interval: Double?
         var recheck_delay_ms: Int?
+        var refresh_delay_ms: Int?
+        var refresh_off_ms: Int?
     }
 
     private struct File: Codable {
         var monitor: Monitor
         var keyboard: [Keyboard]
         var others: Others?
+        var refresh_on_unlock: [Display]?
         var timing: Timing?
     }
 
@@ -44,10 +52,15 @@ struct Config {
     var sunshineAddress: String
     var pollInterval: TimeInterval
     var recheckDelay: useconds_t
+    var refreshOnUnlock: [Display]
+    var refreshDelayMs: Int
+    var refreshOffMs: Int
 
     static let defaultSunshineAddress = "auto"
     static let defaultPollInterval = 1.5
     static let defaultRecheckDelayMs = 300
+    static let defaultRefreshDelayMs = 1000
+    static let defaultRefreshOffMs = 2000
 
     static var path: URL {
         if let p = ProcessInfo.processInfo.environment["DISPLAY_GUARD_CONFIG"], !p.isEmpty {
@@ -76,13 +89,17 @@ struct Config {
             whenSunshine: o?.when_sunshine ?? true,
             sunshineAddress: o?.sunshine_address ?? defaultSunshineAddress,
             pollInterval: t?.poll_interval ?? defaultPollInterval,
-            recheckDelay: useconds_t((t?.recheck_delay_ms ?? defaultRecheckDelayMs) * 1000)
+            recheckDelay: useconds_t((t?.recheck_delay_ms ?? defaultRecheckDelayMs) * 1000),
+            refreshOnUnlock: f.refresh_on_unlock ?? [],
+            refreshDelayMs: t?.refresh_delay_ms ?? defaultRefreshDelayMs,
+            refreshOffMs: t?.refresh_off_ms ?? defaultRefreshOffMs
         )
     }
 
     /// The text `setup` writes. Hex numbers keep the USB / EDID ids readable.
     static func render(monitor: Monitor, keyboards: [Keyboard], othersEnabled: Bool, whenLocked: Bool,
-                       whenSunshine: Bool, sunshineAddress: String, pollInterval: Double, recheckDelayMs: Int) -> String {
+                       whenSunshine: Bool, sunshineAddress: String, refreshOnUnlock: [Display],
+                       pollInterval: Double, recheckDelayMs: Int, refreshDelayMs: Int, refreshOffMs: Int) -> String {
         func hex(_ v: Int, _ width: Int = 4) -> String {
             "0x" + String(format: "%0\(width)X", v)
         }
@@ -117,9 +134,17 @@ struct Config {
         # Or one host, "100.64.0.1" or "host:47989" (the port defaults to 47989).
         sunshine_address = "\(sunshineAddress)"
 
+        # Displays that stay dark after the Mac is unlocked: right after the unlock each one is disconnected
+        # and connected again (see refresh_* in [timing]). One [[refresh_on_unlock]] per display; none = off.
+
+        """
+        for d in refreshOnUnlock { s += "[[refresh_on_unlock]]\nvendor = \(hex(d.vendor))\nmodel  = \(hex(d.model))\n\n" }
+        s += """
         [timing]
         poll_interval    = \(pollInterval)   # seconds between lock / Sunshine checks
         recheck_delay_ms = \(recheckDelayMs)   # look again before disconnecting, to ride out a USB re-enumeration
+        refresh_delay_ms = \(refreshDelayMs)   # wait after the unlock before the refresh
+        refresh_off_ms   = \(refreshOffMs)   # how long the display stays disconnected during the refresh
 
         """
         return s

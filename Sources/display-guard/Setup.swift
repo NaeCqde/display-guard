@@ -163,13 +163,36 @@ func runSetup() {
         }
     }
 
-    // 4. timing
-    let poll: Double = ask(noora, title: tr("4. タイミング", "4. Timing"),
+    // 4. displays to refresh after the unlock
+    var refresh: [MonitorChoice] = []
+    refresh = noora.multipleChoicePrompt(
+        title: tt(tr("4. 解除時の再接続", "4. Refresh on unlock")),
+        question: tt(tr("ロック解除後に暗いままになるモニターを選んでください(なければ何も選ばずEnter)",
+                        "Which monitors stay dark after the unlock? (none: just press return)")),
+        options: monitors,
+        description: tt(tr("選んだモニターは、ロック解除の直後に一度切断してもう一度接続します。",
+                           "Each chosen monitor is disconnected and connected again right after the unlock.")),
+        collapseOnSelection: true, filterMode: .disabled,
+        maxLimit: .unlimited, minLimit: .unlimited)
+    var refreshDelay = Config.defaultRefreshDelayMs, refreshOff = Config.defaultRefreshOffMs
+    if !refresh.isEmpty {
+        refreshDelay = ask(noora, title: tr("4. 解除時の再接続", "4. Refresh on unlock"),
+            prompt: tr("ロック解除から再接続までの待ち時間(ミリ秒)", "Milliseconds from the unlock to the refresh"),
+            description: tr("通常の再接続が終わるのを待ちます。", "It waits for the normal reconnect to finish."),
+            defaultValue: "\(Config.defaultRefreshDelayMs)") { v in Int(v).flatMap { (0...30000).contains($0) ? $0 : nil } }
+        refreshOff = ask(noora, title: tr("4. 解除時の再接続", "4. Refresh on unlock"),
+            prompt: tr("切断したままにする時間(ミリ秒)", "Milliseconds to keep it disconnected"),
+            description: tr("短すぎるとモニターが切断に気づきません。", "Too short and the monitor does not notice."),
+            defaultValue: "\(Config.defaultRefreshOffMs)") { v in Int(v).flatMap { (0...30000).contains($0) ? $0 : nil } }
+    }
+
+    // 5. timing
+    let poll: Double = ask(noora, title: tr("5. タイミング", "5. Timing"),
         prompt: tr("ロックとSunshineを確認する間隔(秒)", "Seconds between the lock / Sunshine checks"),
         description: tr("USBの抜き差しは通知で即座に反応するので、この間隔の影響は受けません。",
                         "USB changes are reacted to at once by notification, so they do not wait for this."),
         defaultValue: "\(Config.defaultPollInterval)") { v in Double(v).flatMap { $0 >= 0.2 && $0 <= 60 ? $0 : nil } }
-    let recheck: Int = ask(noora, title: tr("4. タイミング", "4. Timing"),
+    let recheck: Int = ask(noora, title: tr("5. タイミング", "5. Timing"),
         prompt: tr("切断する前に再確認するまでの待ち時間(ミリ秒)", "Milliseconds to wait before looking again, prior to disconnecting"),
         description: tr("USBの再列挙で一瞬見えなくなる場合に誤って切断しないための待ち時間です。",
                         "It keeps a short USB re-enumeration from disconnecting the monitor by mistake."),
@@ -182,7 +205,8 @@ func runSetup() {
         whenLocked: conditions.contains(.locked),
         whenSunshine: conditions.contains(.sunshine),
         sunshineAddress: sunshineAddress,
-        pollInterval: poll, recheckDelayMs: recheck)
+        refreshOnUnlock: refresh.map { .init(vendor: $0.vendor, model: $0.model) },
+        pollInterval: poll, recheckDelayMs: recheck, refreshDelayMs: refreshDelay, refreshOffMs: refreshOff)
 
     do {
         try FileManager.default.createDirectory(at: path.deletingLastPathComponent(), withIntermediateDirectories: true)
