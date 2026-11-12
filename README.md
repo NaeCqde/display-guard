@@ -11,6 +11,7 @@ macOS で、実際には使っていないディスプレイを「生きてい�
 | Mac がロックされている(設定でオフにできる) | メインモニター以外を切断する |
 | Sunshine がセッション中(設定でオフにできる) | メインモニター以外を切断する |
 | 通常に戻った | 再接続する |
+| ロックを解除した(設定したモニターのみ) | 少し待ってから、そのモニターを一度切断してもう一度接続する。再接続しても画面が暗いままになるモニターへの対策 |
 
 - 切断は `CGSConfigureDisplayEnabled`(非公開 API)を使います。
 - 入力の切り替えは、IOAVService 経由の DDC/CI(VCP 0x60 の書き込み)です。モニターが表示している入力を読み戻すことは、信頼できないため使いません。USB 機器の有無を手がかりにしています。
@@ -50,7 +51,8 @@ launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.local.display-guard.
 1. メインモニターの選択と、入力の値
 2. USB 機器の選択(複数可)
 3. メインモニター以外も切断するか → 切断する条件(ロック中 / Sunshine のセッション中)→ Sunshine のアドレス(既定は `auto`)
-4. タイミング
+4. ロック解除後に暗いままになるモニターの選択(モニターの一覧から複数選択、なければ何も選ばず Enter)→ 待ち時間
+5. タイミング
 
 ファイルは手で編集できます(`DISPLAY_GUARD_CONFIG` で場所を変えられます)。
 
@@ -71,9 +73,15 @@ when_locked   = true
 when_sunshine = true
 sunshine_address = "auto"   # または "100.64.0.1"、"host:47989"
 
+[[refresh_on_unlock]]      # ロック解除後に暗いままになるモニター(複数可、なければ書かない)
+vendor = 0x25E4
+model  = 0x1706
+
 [timing]
 poll_interval    = 1.5      # ロックと Sunshine の確認間隔(秒)
 recheck_delay_ms = 300      # 切断前の再確認までの待ち(ミリ秒)
+refresh_delay_ms = 1000     # ロック解除から再接続までの待ち(ミリ秒)
+refresh_off_ms   = 2000     # 再接続の間、切断したままにする時間(ミリ秒)
 ```
 
 設定ファイルがないと、`run` は起動しません。先に `setup` を実行してください。

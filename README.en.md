@@ -11,6 +11,7 @@ A small resident tool for macOS that keeps the system from treating a display th
 | The Mac is locked (can be turned off in the settings) | Disconnect every display except the main monitor |
 | Sunshine has a session (can be turned off in the settings) | Disconnect every display except the main monitor |
 | Back to normal | Reconnect |
+| The Mac is unlocked (the listed monitors only) | After a short wait, disconnect each listed monitor and connect it again. For a monitor that stays dark although it was reconnected |
 
 - "Disconnect" is `CGSConfigureDisplayEnabled` (a private API).
 - The input is switched with DDC/CI through IOAVService (a VCP 0x60 write). Reading the input back is not reliable on this monitor, so it is not used; the USB devices are the cue.
@@ -50,7 +51,8 @@ A binary on an external volume can hang when launched by launchd; keep it in `~/
 1. The main monitor, and its input values
 2. The USB devices (several allowed)
 3. Disconnect the other displays too? -> the conditions (while locked / while a Sunshine session runs) -> the Sunshine address (default `auto`)
-4. Timing
+4. Monitors that stay dark after the unlock (a list to pick several from; none: just press return) → the waits
+5. Timing
 
 The file can be edited by hand (`DISPLAY_GUARD_CONFIG` moves it).
 
@@ -71,9 +73,15 @@ when_locked   = true
 when_sunshine = true
 sunshine_address = "auto"   # or "100.64.0.1", "host:47989"
 
+[[refresh_on_unlock]]      # a monitor that stays dark after the unlock (several allowed; leave out for none)
+vendor = 0x25E4
+model  = 0x1706
+
 [timing]
 poll_interval    = 1.5      # seconds between lock / Sunshine checks
 recheck_delay_ms = 300      # wait before looking again prior to disconnecting
+refresh_delay_ms = 1000     # wait from the unlock to the refresh (ms)
+refresh_off_ms   = 2000     # how long it stays disconnected during the refresh (ms)
 ```
 
 Without a settings file `run` does not start; run `setup` first.

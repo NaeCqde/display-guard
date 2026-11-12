@@ -325,6 +325,28 @@ func updateMainWanted() {
 }
 
 var lastReason = ""
+var wasLocked = false
+
+/// A display that was connected again by us can stay dark after the unlock (the monitor does not
+/// leave its sleep). Disconnecting and connecting it again makes macOS light the link anew.
+func refreshListedDisplays() {
+    guard !isLocked() else { return }
+    refreshKnown()
+    for id in displayList(active: false).sorted() {
+        guard let d = known[id], cfg.refreshOnUnlock.contains(where: { d == "\($0.vendor):\($0.model)" }) else { continue }
+        let active = displayList(active: true)
+        if fake("locked") != nil { log("(test) would refresh display \(id)"); continue }
+        if active.contains(id) && active.count < 2 { log("display \(id) is the only active one: not refreshed"); continue }
+        if active.contains(id) {
+            disabled.insert(id); saveDisabled(disabled)                    // record first: crash-safe
+            guard setEnabled(id, false) else { disabled.remove(id); saveDisabled(disabled); log("FAILED to disconnect display \(id) for the refresh"); continue }
+            usleep(useconds_t(cfg.refreshOffMs * 1000))
+        }
+        if setEnabled(id, true) { disabled.remove(id); saveDisabled(disabled); log("refreshed display \(id)") }
+        else { log("FAILED to connect display \(id) after the refresh") }
+        if isMain(id) { needMacInput = 6 }
+    }
+}
 
 func reconcile() {
     refreshKnown()
@@ -339,6 +361,13 @@ func reconcile() {
         let others = all.filter { !isMain($0) }
         wanted = others.isEmpty ? all : others
     }
+
+    let lockedNow = isLocked()
+    if wasLocked && !lockedNow && !cfg.refreshOnUnlock.isEmpty {
+        log("unlocked: refreshing the listed displays in \(cfg.refreshDelayMs) ms")
+        DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(cfg.refreshDelayMs)) { refreshListedDisplays() }
+    }
+    wasLocked = lockedNow
 
     let reason = "monitor=\(mainWanted ? "on" : "off") others=\(othersWanted ? "on" : "off") (locked=\(locked) sunshine=\(busy))"
     if reason != lastReason { log(reason); lastReason = reason }
