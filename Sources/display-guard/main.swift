@@ -1,19 +1,22 @@
 // display-guard: keeps macOS from treating a display that is not really in
 // use as alive (the "zombie screen" windows wander onto).
 //
-//   1. No MonsGeek keyboard (wired or dongle) on the Mac -> switch the Dell to
-//      DP 1 over DDC, then disconnect it. A keyboard is back -> reconnect the
-//      Dell, then switch it to HDMI 1. (The Mac cannot read which input the
-//      Dell shows, so the keyboards are the cue.)
-//   2. The Mac is locked                            -> disconnect all but the Dell.
-//   3. A Sunshine session is running (this Mac's own Sunshine, on its LAN/Tailscale address)               -> disconnect all but the Dell.
-//   Back to normal                                  -> reconnect.
+//   1. None of the listed USB devices (the keyboards) is on the Mac -> switch the
+//      main monitor to the other input over DDC, then disconnect it. One is back
+//      -> reconnect the monitor, then switch it to the Mac's input. (The Mac cannot
+//      read which input the monitor shows, so the keyboards are the cue.)
+//   2. The Mac is locked                    -> disconnect all but the main monitor.
+//   3. A Sunshine session is running        -> disconnect all but the main monitor.
+//   Back to normal                          -> reconnect.
 //
-// "Disconnect" is CGSConfigureDisplayEnabled (private API, same as BetterDisplay's
-// paid feature). The input is switched over DDC/CI (VCP 0x60 write) through IOAVService
-// (Apple Silicon). Reading the input back is not reliable on the Dell, so it is not used. Never leaves the Mac with zero active displays.
+// 2 and 3 can be switched off in the settings. "Disconnect" is
+// CGSConfigureDisplayEnabled (private API, same as BetterDisplay's paid feature).
+// The input is switched over DDC/CI (VCP 0x60 write) through IOAVService (Apple
+// Silicon). Reading the input back is not reliable, so it is not used. Never
+// leaves the Mac with zero active displays.
 //
-// Usage: display-guard [run|status|restore]
+// Usage: display-guard [run|status|restore|setup]
+//   setup   asks a few questions and writes ~/.config/display-guard/config.toml
 
 import Foundation
 import CoreGraphics
@@ -21,15 +24,12 @@ import IOKit
 
 // MARK: - Settings
 
-let dellVendor: UInt32 = 0x10AC          // Dell
-let dellModel: UInt32 = 0x2014           // G2725D
-let macInput = 0x11                      // VCP 0x60 value for HDMI 1 (the Mac)
-let dpInput = 0x0F                       // VCP 0x60 value for DP 1 (the other computer)
-let monsgeekVendor: UInt32 = 0x3151
-let pollInterval: TimeInterval = 1.5
-let confirmDisconnect = 1                // polls in a row (plus the short re-check below) before acting
-let recheckDelay: useconds_t = 300_000   // re-check that the keyboards are really gone
+/// Loaded from the settings file in `run` and `status` (see Config.swift).
+var cfg: Config!
+let confirmDisconnect = 1                // polls in a row (plus the short re-check) before acting
 let confirmReconnect = 1
+
+func hex2(_ v: Int) -> String { "0x" + String(format: "%02X", v) }
 
 // MARK: - Private APIs
 
@@ -99,7 +99,10 @@ func saveDisabled(_ ids: Set<CGDirectDisplayID>) {
 var disabled = loadDisabled()
 var known: [CGDirectDisplayID: String] = [:]   // id -> "vendor:model" for every display seen
 
-func isDell(_ id: CGDirectDisplayID) -> Bool { known[id] == "\(dellVendor):\(dellModel)" }
+func isMain(_ id: CGDirectDisplayID) -> Bool {
+    guard let c = cfg else { return false }
+    return known[id] == "\(c.monitor.vendor):\(c.monitor.model)"
+}
 
 func refreshKnown() {
     let online = displayList(active: false)
@@ -116,7 +119,7 @@ func restoreAll() {
     saveDisabled(disabled)
 }
 
-// MARK: - DDC (Dell input)
+// MARK: - DDC (main monitor input)
 
 func avServices() -> [CFTypeRef] {
     var it: io_iterator_t = 0
@@ -133,14 +136,10 @@ func avServices() -> [CFTypeRef] {
 func edidIDs(_ s: CFTypeRef) -> (UInt32, UInt32)? {
     var e = [UInt8](repeating: 0, count: 128)
     guard IOAVServiceReadI2C(s, 0x50, 0, &e, 128) == 0 else { return nil }
-    let m = (UInt32(e[8]) << 8) | UInt32(e[9])      // EDID vendor id, compressed ASCII
-    let vendor = m   // compare as EISA code below
-    _ = vendor
-    return (m, UInt32(e[11]) << 8 | UInt32(e[10]))
+    // EDID vendor id (compressed ASCII); the same number CoreGraphics reports, e.g. "DEL" = 0x10AC.
+    let vendor = (UInt32(e[8]) << 8) | UInt32(e[9])
+    return (vendor, UInt32(e[11]) << 8 | UInt32(e[10]))
 }
-
-/// EISA code for "DEL" = ((D-64)<<10)|((E-64)<<5)|(L-64)
-let dellEISA: UInt32 = (4 << 10) | (5 << 5) | 12
 
 func getVCP(_ s: CFTypeRef, _ code: UInt8) -> Int? {
     var req: [UInt8] = [0x82, 0x01, code]
@@ -159,13 +158,13 @@ func getVCP(_ s: CFTypeRef, _ code: UInt8) -> Int? {
     return nil
 }
 
-/// Sets the Dell's input source (VCP 0x60) over DDC/CI. The monitor accepts this
-/// from the HDMI cable even while showing another input, but not while the
-/// display is disabled by us -- so call it only while the Dell is connected.
-func setDellInput(_ value: Int) -> Bool {
-    if fake("keyboards") != nil { log("(test) would set Dell input to 0x\(String(value, radix: 16))"); return true }
+/// Sets the main monitor's input source (VCP 0x60) over DDC/CI. The monitor
+/// accepts this from the cable even while showing another input, but not while
+/// the display is disabled by us -- so call it only while it is connected.
+func setMonitorInput(_ value: Int) -> Bool {
+    if fake("keyboards") != nil { log("(test) would set the monitor input to \(hex2(value))"); return true }
     for s in avServices() {
-        guard let (vendor, model) = edidIDs(s), vendor == dellEISA, model == dellModel else { continue }
+        guard let (vendor, model) = edidIDs(s), Int(vendor) == cfg.monitor.vendor, Int(model) == cfg.monitor.model else { continue }
         var req: [UInt8] = [0x84, 0x03, 0x60, UInt8(value >> 8), UInt8(value & 255)]
         var ck: UInt8 = 0x6E ^ 0x51
         for b in req { ck ^= b }
@@ -175,24 +174,45 @@ func setDellInput(_ value: Int) -> Bool {
     return false
 }
 
-// MARK: - MonsGeek keyboards (wired + 2.4GHz dongle)
+// MARK: - USB devices (the keyboards)
 
-/// Number of MonsGeek USB devices the Mac can see. The Mac cannot tell which
-/// input the Dell shows, so the keyboards are the cue: they go away from the
+struct USBDevice {
+    let vendor: Int
+    let product: Int
+    let name: String
+}
+
+/// Every USB device the Mac can see.
+func usbDevices() -> [USBDevice] {
+    guard let match = IOServiceMatching("IOUSBHostDevice") else { return [] }
+    var it: io_iterator_t = 0
+    guard IOServiceGetMatchingServices(kIOMainPortDefault, match, &it) == 0 else { return [] }
+    var out: [USBDevice] = []
+    while case let s = IOIteratorNext(it), s != 0 {
+        defer { IOObjectRelease(s) }
+        var props: Unmanaged<CFMutableDictionary>?
+        guard IORegistryEntryCreateCFProperties(s, &props, kCFAllocatorDefault, 0) == 0,
+              let d = props?.takeRetainedValue() as? [String: Any],
+              let vendor = (d["idVendor"] as? NSNumber)?.intValue,
+              let product = (d["idProduct"] as? NSNumber)?.intValue else { continue }
+        let name = (d["USB Product Name"] as? String) ?? (d["kUSBProductString"] as? String) ?? "USB device"
+        out.append(USBDevice(vendor: vendor, product: product, name: name))
+    }
+    IOObjectRelease(it)
+    return out
+}
+
+/// Number of the listed USB devices the Mac can see. The Mac cannot tell which
+/// input the monitor shows, so the keyboards are the cue: they go away from the
 /// Mac when the desk is switched to the other computer.
 func keyboardCount() -> Int {
     if let f = fake("keyboards"), let n = Int(f) { return n }
-    guard let match = IOServiceMatching("IOUSBHostDevice") as NSMutableDictionary? else { return 0 }
-    match[kIOPropertyMatchKey] = ["idVendor": NSNumber(value: monsgeekVendor)] as NSDictionary
-    var it: io_iterator_t = 0
-    guard IOServiceGetMatchingServices(kIOMainPortDefault, match as CFDictionary, &it) == 0 else { return 0 }
-    var n = 0
-    while case let s = IOIteratorNext(it), s != 0 { n += 1; IOObjectRelease(s) }
-    IOObjectRelease(it)
-    return n
+    return usbDevices().filter { d in
+        cfg.keyboards.contains { $0.vendor == d.vendor && ($0.product == nil || $0.product == d.product) }
+    }.count
 }
 
-/// React to MonsGeek USB devices appearing or vanishing at once instead of
+/// React to the listed USB devices appearing or vanishing at once instead of
 /// waiting for the next poll.
 var usbNotifyPort: IONotificationPortRef?
 
@@ -204,12 +224,14 @@ func startUSBWatch() {
         while case let s = IOIteratorNext(iterator), s != 0 { IOObjectRelease(s) }
         DispatchQueue.main.async { reconcile() }
     }
-    for type in [kIOTerminatedNotification, kIOFirstMatchNotification] {
-        guard let match = IOServiceMatching("IOUSBHostDevice") as NSMutableDictionary? else { continue }
-        match[kIOPropertyMatchKey] = ["idVendor": NSNumber(value: monsgeekVendor)] as NSDictionary
-        var it: io_iterator_t = 0
-        if IOServiceAddMatchingNotification(port, type, match as CFDictionary, callback, nil, &it) == 0 {
-            while case let s = IOIteratorNext(it), s != 0 { IOObjectRelease(s) }   // arms the notification
+    for vendor in Set(cfg.keyboards.map(\.vendor)) {
+        for type in [kIOTerminatedNotification, kIOFirstMatchNotification] {
+            guard let match = IOServiceMatching("IOUSBHostDevice") as NSMutableDictionary? else { continue }
+            match[kIOPropertyMatchKey] = ["idVendor": NSNumber(value: vendor)] as NSDictionary
+            var it: io_iterator_t = 0
+            if IOServiceAddMatchingNotification(port, type, match as CFDictionary, callback, nil, &it) == 0 {
+                while case let s = IOIteratorNext(it), s != 0 { IOObjectRelease(s) }   // arms the notification
+            }
         }
     }
 }
@@ -245,8 +267,15 @@ func localIPv4s() -> [String] {
     return out
 }
 
-func serverInfo(at ip: String) -> String? {
-    guard let url = URL(string: "http://\(ip):47989/serverinfo") else { return nil }
+/// "auto" = this Mac's own addresses; otherwise the one host (or host:port) of the settings.
+func sunshineHosts() -> [String] {
+    let a = cfg.sunshineAddress.trimmingCharacters(in: .whitespaces)
+    return a.isEmpty || a == "auto" ? localIPv4s() : [a]
+}
+
+func serverInfo(at host: String) -> String? {
+    let hostPort = host.contains(":") ? host : "\(host):47989"
+    guard let url = URL(string: "http://\(hostPort)/serverinfo") else { return nil }
     var req = URLRequest(url: url); req.timeoutInterval = 1
     let sem = DispatchSemaphore(value: 0)
     var text: String?
@@ -260,37 +289,37 @@ func serverInfo(at ip: String) -> String? {
 
 func sunshineBusy() -> Bool {
     if let f = fake("sunshine") { return f == "1" }
-    for ip in localIPv4s() {
-        if let text = serverInfo(at: ip), text.contains("<state>") { return text.contains("SUNSHINE_SERVER_BUSY") }
+    for host in sunshineHosts() {
+        if let text = serverInfo(at: host), text.contains("<state>") { return text.contains("SUNSHINE_SERVER_BUSY") }
     }
     return false
 }
 
 // MARK: - Decision
 
-var dellWanted = true
+var mainWanted = true
 var needMacInput = 0               // polls left to (re)send "input = HDMI 1" after reconnecting
-var pendingDell: Bool? = nil
+var pendingMain: Bool? = nil
 var pendingCount = 0
 
-func updateDellWanted() {
+func updateMainWanted() {
     let want = keyboardCount() > 0
-    guard want != dellWanted else { pendingDell = nil; pendingCount = 0; return }
-    if pendingDell == want { pendingCount += 1 } else { pendingDell = want; pendingCount = 1 }
+    guard want != mainWanted else { pendingMain = nil; pendingCount = 0; return }
+    if pendingMain == want { pendingCount += 1 } else { pendingMain = want; pendingCount = 1 }
     guard pendingCount >= (want ? confirmReconnect : confirmDisconnect) else { return }
     if !want {                                // gone: look once more to ride out a re-enumeration
-        usleep(recheckDelay)
-        if keyboardCount() > 0 { pendingDell = nil; pendingCount = 0; return }
+        usleep(cfg.recheckDelay)
+        if keyboardCount() > 0 { pendingMain = nil; pendingCount = 0; return }
     }
-    pendingDell = nil; pendingCount = 0
-    dellWanted = want
+    pendingMain = nil; pendingCount = 0
+    mainWanted = want
     if want {
-        log("MonsGeek keyboard is back: reconnecting the Dell, then switching it to HDMI 1")
+        log("a keyboard is back: reconnecting the monitor, then switching it to \(hex2(cfg.monitor.mac_input))")
         needMacInput = 6
     } else {
-        log("no MonsGeek keyboard on the Mac: switching the Dell to DP 1, then disconnecting it")
+        log("no keyboard on the Mac: switching the monitor to \(hex2(cfg.monitor.other_input)), then disconnecting it")
         needMacInput = 0
-        for _ in 0..<3 { if setDellInput(dpInput) { break }; usleep(300_000) }
+        for _ in 0..<3 { if setMonitorInput(cfg.monitor.other_input) { break }; usleep(300_000) }
         usleep(500_000)                       // let the monitor leave HDMI before the display is removed
     }
 }
@@ -299,18 +328,19 @@ var lastReason = ""
 
 func reconcile() {
     refreshKnown()
-    updateDellWanted()
-    let locked = isLocked(), busy = sunshineBusy()
+    updateMainWanted()
+    let locked = cfg.othersEnabled && cfg.whenLocked && isLocked()
+    let busy = cfg.othersEnabled && cfg.whenSunshine && sunshineBusy()
     let othersWanted = !(locked || busy)
 
     let all = Set(known.keys)
-    var wanted = all.filter { isDell($0) ? dellWanted : othersWanted }
+    var wanted = all.filter { isMain($0) ? mainWanted : othersWanted }
     if wanted.isEmpty {                       // never leave the Mac with no display
-        let others = all.filter { !isDell($0) }
+        let others = all.filter { !isMain($0) }
         wanted = others.isEmpty ? all : others
     }
 
-    let reason = "dell=\(dellWanted ? "on" : "off") others=\(othersWanted ? "on" : "off") (locked=\(locked) sunshine=\(busy))"
+    let reason = "monitor=\(mainWanted ? "on" : "off") others=\(othersWanted ? "on" : "off") (locked=\(locked) sunshine=\(busy))"
     if reason != lastReason { log(reason); lastReason = reason }
 
     let active = Set(displayList(active: true))
@@ -326,26 +356,39 @@ func reconcile() {
         }
     }
 
-    // After reconnecting the Dell, tell it to show HDMI 1. The link needs a
+    // After reconnecting the main monitor, tell it to show the Mac's input. The link needs a
     // moment to come up, so the (idempotent) command is repeated for a few polls.
-    if needMacInput > 0, Set(displayList(active: true)).contains(where: isDell) {
+    if needMacInput > 0, Set(displayList(active: true)).contains(where: isMain) {
         needMacInput -= 1
-        if setDellInput(macInput) && needMacInput == 0 { log("Dell input -> HDMI 1 sent") }
+        if setMonitorInput(cfg.monitor.mac_input) && needMacInput == 0 { log("monitor input -> \(hex2(cfg.monitor.mac_input)) sent") }
     }
 }
 
 // MARK: - Main
+
+func loadConfigOrExit() {
+    do { cfg = try Config.load() }
+    catch { print("display-guard: \(error)"); exit(1) }
+}
 
 let command = CommandLine.arguments.dropFirst().first ?? "run"
 switch command {
 case "restore":
     restoreAll()
 case "status":
+    cfg = try? Config.load()
     refreshKnown()
-    log("displays: \(known.map { "\($0.key)=\($0.value)\(isDell($0.key) ? "(Dell)" : "")" }.sorted())")
+    log("displays: \(known.map { "\($0.key)=\($0.value)\(isMain($0.key) ? "(main)" : "")" }.sorted())")
     log("active: \(displayList(active: true))  disabled-by-us: \(disabled.sorted())")
-    log("MonsGeek USB devices: \(keyboardCount())  locked: \(isLocked())  sunshine busy: \(sunshineBusy())")
+    if cfg == nil {
+        log("no settings file (\(Config.path.path)): run `display-guard setup`")
+    } else {
+        log("listed USB devices: \(keyboardCount())  locked: \(isLocked())  sunshine busy: \(sunshineBusy())")
+    }
+case "setup":
+    runSetup()
 case "run":
+    loadConfigOrExit()
     restoreAll()                              // recover from a previous crash
     for sig in [SIGINT, SIGTERM, SIGHUP] { signal(sig, SIG_IGN) }
     var sources: [DispatchSourceSignal] = []
@@ -357,11 +400,11 @@ case "run":
     }
     log("display-guard started")
     startUSBWatch()
-    let timer = Timer(timeInterval: pollInterval, repeats: true) { _ in reconcile() }
+    let timer = Timer(timeInterval: cfg.pollInterval, repeats: true) { _ in reconcile() }
     RunLoop.main.add(timer, forMode: .common)
     reconcile()
     RunLoop.main.run()
 default:
-    print("usage: display-guard [run|status|restore]")
+    print("usage: display-guard [run|status|restore|setup]")
     exit(2)
 }
