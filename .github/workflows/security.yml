@@ -282,7 +282,7 @@ jobs:
                   why=$(unfinished) && { say "Not merged automatically: $why."; exit 0; }
                   # fixed rules
                   files=$(gh pr diff "$PR" --name-only)
-                  if echo "$files" | grep -Eqi '(^|/)(\.github/|Cargo\.(toml|lock)$|package(-lock)?\.json$|(pnpm-lock\.yaml|yarn\.lock|bun\.lockb?)$|go\.(mod|sum)$|build\.rs$|post_build\.rs$|build\.[cm]?[jt]s$|patches/|bunfig\.toml$|\.npmrc$|tsconfig\.json$|Dockerfile|compose\.ya?ml$|wrangler\.|LICENSE|docs/SPEC\.md$|[^/]*\.(sh|bat|ps1|cmd)$|[^/]*\.(exe|dll|so|dylib|wasm|zip|jar)$)'; then
+                  if echo "$files" | grep -Eqi '(^|/)(\.github/|Package\.(swift|resolved)$|[^/]*\.plist|Cargo\.(toml|lock)$|package(-lock)?\.json$|(pnpm-lock\.yaml|yarn\.lock|bun\.lockb?)$|go\.(mod|sum)$|build\.rs$|post_build\.rs$|build\.[cm]?[jt]s$|patches/|bunfig\.toml$|\.npmrc$|tsconfig\.json$|Dockerfile|compose\.ya?ml$|wrangler\.|LICENSE|docs/SPEC\.md$|[^/]*\.(sh|bat|ps1|cmd)$|[^/]*\.(exe|dll|so|dylib|wasm|zip|jar)$)'; then
                     say "Not merged automatically: the change touches files that only the owner may merge (workflows, dependencies, build or install scripts, binaries, the license or the specification)."; exit 0
                   fi
                   read -r add del n < <(gh pr view "$PR" --json additions,deletions,changedFiles --jq '"\(.additions) \(.deletions) \(.changedFiles)"')
