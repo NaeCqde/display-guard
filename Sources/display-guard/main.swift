@@ -298,7 +298,8 @@ func sunshineBusy() -> Bool {
 // MARK: - Decision
 
 var mainWanted = true
-var needMacInput = 0               // polls left to (re)send "input = HDMI 1" after reconnecting
+var needMacInput = 0               // polls left to (re)send "input = HDMI 1" after the keyboards are back
+var macInputSent = false
 var pendingMain: Bool? = nil
 var pendingCount = 0
 
@@ -315,7 +316,7 @@ func updateMainWanted() {
     mainWanted = want
     if want {
         log("a keyboard is back: reconnecting the monitor, then switching it to \(hex2(cfg.monitor.mac_input))")
-        needMacInput = 6
+        needMacInput = 20; macInputSent = false
     } else {
         log("no keyboard on the Mac: switching the monitor to \(hex2(cfg.monitor.other_input)), then disconnecting it")
         needMacInput = 0
@@ -344,7 +345,7 @@ func refreshListedDisplays() {
         }
         if setEnabled(id, true) { disabled.remove(id); saveDisabled(disabled); log("refreshed display \(id)") }
         else { log("FAILED to connect display \(id) after the refresh") }
-        if isMain(id) { needMacInput = 6 }
+        if isMain(id) { needMacInput = 20; macInputSent = false }
     }
 }
 
@@ -385,11 +386,18 @@ func reconcile() {
         }
     }
 
-    // After reconnecting the main monitor, tell it to show the Mac's input. The link needs a
-    // moment to come up, so the (idempotent) command is repeated for a few polls.
-    if needMacInput > 0, Set(displayList(active: true)).contains(where: isMain) {
+    // After the keyboards are back, tell the monitor to show the Mac's input. This must not wait for
+    // macOS to list the display: a monitor that was switched to the other input can drop out of the
+    // list by itself, and only this command brings it back. The command is repeated on a few polls
+    // (the link needs a moment to come up), and for up to ~30 s until the monitor answers.
+    if needMacInput > 0 {
         needMacInput -= 1
-        if setMonitorInput(cfg.monitor.mac_input) && needMacInput == 0 { log("monitor input -> \(hex2(cfg.monitor.mac_input)) sent") }
+        if setMonitorInput(cfg.monitor.mac_input) {
+            if !macInputSent { log("monitor input -> \(hex2(cfg.monitor.mac_input)) sent"); macInputSent = true }
+            needMacInput = min(needMacInput, 3)       // a few more times, then stop
+        } else if needMacInput == 0 {
+            log("FAILED to send the input \(hex2(cfg.monitor.mac_input)): the monitor is not reachable over DDC (is it connected to this Mac?)")
+        }
     }
 }
 
