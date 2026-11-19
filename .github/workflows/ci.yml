@@ -148,6 +148,12 @@ jobs:
                   path: in
                   pattern: display-guard-*
                   merge-multiple: true
+            - name: Only a commit in main is signed
+              env:
+                  GH_TOKEN: ${{ github.token }}
+              run: |
+                  status=$(gh api "repos/${{ github.repository }}/compare/main...${{ github.sha }}" --jq .status)
+                  case "$status" in identical|behind) ;; *) echo "::error::commit ${{ github.sha }} is not in main ($status): not signed"; exit 1 ;; esac
             - name: Sign
               env:
                   SIGN_P12: ${{ secrets.MACOS_SIGN_P12 }}
@@ -171,7 +177,7 @@ jobs:
                   mkdir signed
                   n=0
                   for f in in/*macOS*; do
-                    case "$f" in *.sha256) continue ;; esac
+                    case "$f" in *.sha256|*/TREE-*) continue ;; esac
                     [ -f "$f" ] || continue
                     b=$(basename "$f")
                     cp "$f" "signed/$b"
@@ -208,8 +214,8 @@ jobs:
 
     release:
         name: Release
-        needs: [reuse, package, sign, sign]
-        if: ${{ !cancelled() && needs.sign.result != 'failure' && needs.sign.result != 'failure' && (needs.reuse.outputs.reuse == 'true' || needs.package.result == 'success') }}
+        needs: [reuse, package, sign]
+        if: ${{ !cancelled() && needs.sign.result != 'failure' && (needs.reuse.outputs.reuse == 'true' || needs.package.result == 'success') }}
         runs-on: ubuntu-24.04
         permissions:
             contents: write
@@ -218,16 +224,8 @@ jobs:
             - uses: actions/download-artifact@v4
               with:
                   path: dist
-                  pattern: staticfs-*
+                  pattern: display-guard-*
                   merge-multiple: true
-            - uses: actions/download-artifact@v4
-              if: needs.sign.result == 'success'
-              with:
-                  name: signed-macos
-                  path: signed
-            - name: Use the signed macOS files
-              if: needs.sign.result == 'success'
-              run: cp signed/* dist/
             - uses: actions/download-artifact@v4
               if: needs.sign.result == 'success'
               with:
