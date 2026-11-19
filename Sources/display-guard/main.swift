@@ -337,13 +337,18 @@ func refreshListedDisplays() {
         guard let d = known[id], cfg.refreshOnUnlock.contains(where: { d == "\($0.vendor):\($0.model)" }) else { continue }
         let active = displayList(active: true)
         if fake("locked") != nil { log("(test) would refresh display \(id)"); continue }
-        if active.contains(id) && active.count < 2 { log("display \(id) is the only active one: not refreshed"); continue }
+        // Also when it is the only active display (the main monitor often is not listed after the lock):
+        // that is when a dark screen hurts most. The Mac keeps running without a display for the
+        // off time, and the display is connected again at once, with retries.
         if active.contains(id) {
+            if active.count < 2 { log("display \(id) is the only active one: refreshing it anyway") }
             disabled.insert(id); saveDisabled(disabled)                    // record first: crash-safe
             guard setEnabled(id, false) else { disabled.remove(id); saveDisabled(disabled); log("FAILED to disconnect display \(id) for the refresh"); continue }
             usleep(useconds_t(cfg.refreshOffMs * 1000))
         }
-        if setEnabled(id, true) { disabled.remove(id); saveDisabled(disabled); log("refreshed display \(id)") }
+        var back = false
+        for _ in 0..<5 { if setEnabled(id, true) { back = true; break }; usleep(1_000_000) }
+        if back { disabled.remove(id); saveDisabled(disabled); log("refreshed display \(id)") }
         else { log("FAILED to connect display \(id) after the refresh") }
         if isMain(id) { needMacInput = 20; macInputSent = false }
     }
@@ -358,6 +363,7 @@ func reconcile() {
 
     let all = Set(known.keys)
     var wanted = all.filter { isMain($0) ? mainWanted : othersWanted }
+    if displayList(active: true).isEmpty { wanted = all }   // no display at all: bring everything back
     if wanted.isEmpty {                       // never leave the Mac with no display
         let others = all.filter { !isMain($0) }
         wanted = others.isEmpty ? all : others
