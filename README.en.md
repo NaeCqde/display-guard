@@ -1,5 +1,7 @@
 # display-guard
 
+English | [日本語](README.md)
+
 A small resident tool for macOS that keeps the system from treating a display that is not really in use as alive (the "zombie screen" that windows wander onto). Apple Silicon Macs only.
 
 ## Behavior

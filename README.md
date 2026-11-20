@@ -1,5 +1,7 @@
 # display-guard
 
+[English](README.en.md) | 日本語
+
 macOS で、実際には使っていないディスプレイを「生きている」と扱ってしまい、ウィンドウがそこへ移動する問題(ゾンビ画面)を避けるための小さな常駐ツールです。Apple Silicon の Mac 専用です。
 
 ## 動作
