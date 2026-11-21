@@ -1,7 +1,8 @@
 import Foundation
 import TOMLDecoder
 
-/// The settings file: `~/.config/display-guard/config.toml` (or the path in
+/// The settings file: `config.toml` in the current directory, else next to the executable, else
+/// `~/.config/display-guard/config.toml` (or the path in
 /// `DISPLAY_GUARD_CONFIG`). `display-guard setup` writes it.
 struct Config {
     struct Monitor: Codable {
@@ -66,8 +67,16 @@ struct Config {
         if let p = ProcessInfo.processInfo.environment["DISPLAY_GUARD_CONFIG"], !p.isEmpty {
             return URL(fileURLWithPath: (p as NSString).expandingTildeInPath)
         }
-        return FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".config/display-guard/config.toml")
+        // `config.toml` in the current directory; only when it does not exist, the one next to the executable
+        // (the one that is found is the only one that is read).
+        let fm = FileManager.default
+        let cwd = URL(fileURLWithPath: fm.currentDirectoryPath).appendingPathComponent("config.toml")
+        if fm.fileExists(atPath: cwd.path) { return cwd }
+        if let exe = Bundle.main.executableURL?.resolvingSymlinksInPath() {
+            let beside = exe.deletingLastPathComponent().appendingPathComponent("config.toml")
+            if fm.fileExists(atPath: beside.path) { return beside }
+        }
+        return fm.homeDirectoryForCurrentUser.appendingPathComponent(".config/display-guard/config.toml")
     }
 
     static func load() throws -> Config {
