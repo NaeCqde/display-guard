@@ -38,11 +38,14 @@ cp .build/release/display-guard ~/.local/bin/
 ~/.local/bin/display-guard run        # 常駐して監視する
 ```
 
-ログイン時に自動で起動するには、`com.local.display-guard.plist.template` の `__HOME__` を自分のホームフォルダに置き換え、`~/Library/LaunchAgents/com.local.display-guard.plist` として置いてから、次を実行します。
+ログイン時に自動で起動するには、設定を作ったあとで次を実行します。実行ファイルを `~/.local/bin` にコピーし、launchd に登録します(ログイン時に起動し、止まっても再起動します)。
 
 ```bash
-launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.local.display-guard.plist
+display-guard install      # 登録して起動
+display-guard uninstall    # 登録を外し、切断したディスプレイを戻す(実行ファイルと設定は残す)
 ```
+
+手で登録したい場合は、`com.local.display-guard.plist.template` の `__HOME__` を自分のホームフォルダに置き換え、`~/Library/LaunchAgents/com.local.display-guard.plist` として置いてから、`launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.local.display-guard.plist` を実行します。
 
 外付けボリューム上のバイナリは、launchd から起動すると止まることがあるため、`~/.local/bin` などに置いてください。
 
@@ -55,6 +58,7 @@ launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.local.display-guard.
 3. メインモニター以外も切断するか → 切断する条件(ロック中 / Sunshine のセッション中)→ Sunshine のアドレス(既定は `auto`)
 4. ロック解除後に暗いままになるモニターの選択(モニターの一覧から複数選択、なければ何も選ばず Enter)→ 待ち時間
 5. タイミング
+6. 自動起動するか(既定は「はい」。「はい」なら、設定を書いたあと `install` と同じ登録をして、すぐ起動する)
 
 ファイルは手で編集できます(`DISPLAY_GUARD_CONFIG` で場所を変えられます)。
 

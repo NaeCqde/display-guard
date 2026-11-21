@@ -15,8 +15,10 @@
 // Silicon). Reading the input back is not reliable, so it is not used. Never
 // leaves the Mac with zero active displays.
 //
-// Usage: display-guard [run|status|restore|setup]
-//   setup   asks a few questions and writes ~/.config/display-guard/config.toml
+// Usage: display-guard [run|status|restore|setup|install|uninstall]
+//   setup     asks a few questions and writes ~/.config/display-guard/config.toml
+//   install   copies the program to ~/.local/bin and registers it with launchd (login item)
+//   uninstall removes the launchd registration and brings the displays back
 
 import Foundation
 import CoreGraphics
@@ -430,6 +432,10 @@ case "status":
     }
 case "setup":
     runSetup()
+case "install":
+    runInstall()
+case "uninstall":
+    runUninstall()
 case "run":
     loadConfigOrExit()
     restoreAll()                              // recover from a previous crash
@@ -448,6 +454,6 @@ case "run":
     reconcile()
     RunLoop.main.run()
 default:
-    print("usage: display-guard [run|status|restore|setup]")
+    print("usage: display-guard [run|status|restore|setup|install|uninstall]")
     exit(2)
 }
