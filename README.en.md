@@ -91,3 +91,8 @@ Without a settings file `run` does not start; run `setup` first.
 ## License
 
 MIT
+
+## Where the settings are read from
+
+`config.toml`: the current directory is searched first. If the file is there, only that one is read; if not, the one in the directory of the executable is read.
+If neither exists, `~/.config/display-guard/config.toml` is used (`DISPLAY_GUARD_CONFIG` wins when set).
