@@ -38,11 +38,14 @@ cp .build/release/display-guard ~/.local/bin/
 ~/.local/bin/display-guard run        # run resident
 ```
 
-To start it at login, replace `__HOME__` in `com.local.display-guard.plist.template` with your home folder, save it as `~/Library/LaunchAgents/com.local.display-guard.plist`, and run:
+To start it at login, run this after the settings exist. It copies the program to `~/.local/bin` and registers it with launchd (started at login, restarted if it stops):
 
 ```bash
-launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.local.display-guard.plist
+display-guard install      # register and start
+display-guard uninstall    # unregister and bring the displays back (the program and the settings are kept)
 ```
+
+To register it by hand, replace `__HOME__` in `com.local.display-guard.plist.template` with your home folder, save it as `~/Library/LaunchAgents/com.local.display-guard.plist`, and run `launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.local.display-guard.plist`.
 
 A binary on an external volume can hang when launched by launchd; keep it in `~/.local/bin` or similar.
 
@@ -55,6 +58,7 @@ A binary on an external volume can hang when launched by launchd; keep it in `~/
 3. Disconnect the other displays too? -> the conditions (while locked / while a Sunshine session runs) -> the Sunshine address (default `auto`)
 4. Monitors that stay dark after the unlock (a list to pick several from; none: just press return) → the waits
 5. Timing
+6. Start at login? (default yes: after the settings are written it does what `install` does and starts at once)
 
 The file can be edited by hand (`DISPLAY_GUARD_CONFIG` moves it).
 

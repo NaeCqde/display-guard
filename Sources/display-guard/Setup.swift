@@ -198,6 +198,22 @@ func runSetup() {
                         "It keeps a short USB re-enumeration from disconnecting the monitor by mistake."),
         defaultValue: "\(Config.defaultRecheckDelayMs)") { v in Int(v).flatMap { (0...5000).contains($0) ? $0 : nil } }
 
+    // 6. start at login
+    let customPath = ProcessInfo.processInfo.environment["DISPLAY_GUARD_CONFIG"].map { !$0.isEmpty } ?? false
+    var autostart = false
+    if customPath {
+        print(tr("DISPLAY_GUARD_CONFIG で別の場所を指定しているので、自動起動の登録は聞きません(`display-guard install` は標準の場所の設定を読みます)。",
+                 "DISPLAY_GUARD_CONFIG points elsewhere, so the start-at-login step is skipped (`display-guard install` reads the settings in the standard place)."))
+    } else {
+        autostart = noora.yesOrNoChoicePrompt(
+            title: tt(tr("6. 自動起動", "6. Start at login")),
+            question: tt(tr("ログイン時に自動で起動しますか?", "Start display-guard automatically at login?")),
+            defaultAnswer: true,
+            description: tt(tr("「はい」なら、設定を書いたあとに ~/.local/bin へコピーして launchd に登録し、すぐ起動します。",
+                               "If yes, after the settings are written it is copied to ~/.local/bin, registered with launchd and started at once.")),
+            collapseOnSelection: true)
+    }
+
     let text = Config.render(
         monitor: .init(vendor: monitor.vendor, model: monitor.model, mac_input: macInput, other_input: otherInput),
         keyboards: chosen.map { .init(vendor: $0.vendor, product: $0.product) },
@@ -216,6 +232,11 @@ func runSetup() {
     }
     print("")
     print(tr("\(path.path) に書きました。", "Wrote \(path.path)."))
-    print(tr("確認: display-guard status    常駐: display-guard run(README参照)",
-             "Check: display-guard status    Run: display-guard run (see the README)"))
+    if autostart {
+        print("")
+        runInstall()
+    } else {
+        print(tr("確認: display-guard status    起動: display-guard install(ログイン時に自動起動)または display-guard run",
+                 "Check: display-guard status    Start: display-guard install (at login) or display-guard run"))
+    }
 }
