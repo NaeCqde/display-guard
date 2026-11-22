@@ -110,7 +110,12 @@ func refreshKnown() {
     let online = displayList(active: false)
     for id in online { known[id] = "\(CGDisplayVendorNumber(id)):\(CGDisplayModelNumber(id))" }
     // Forget displays that were unplugged (not online and not disabled by us).
-    for id in known.keys where !online.contains(id) && !disabled.contains(id) { known[id] = nil }
+    // A display on the refresh list is kept too: macOS can drop it from the online list by itself
+    // (dark monitor after the lock), and enabling its id again is what brings it back.
+    for id in known.keys where !online.contains(id) && !disabled.contains(id) {
+        if let d = known[id], let c = cfg, c.refreshOnUnlock.contains(where: { d == "\($0.vendor):\($0.model)" }) { continue }
+        known[id] = nil
+    }
 }
 
 func restoreAll() {
