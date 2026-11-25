@@ -171,6 +171,7 @@ func getVCP(_ s: CFTypeRef, _ code: UInt8) -> Int? {
 /// accepts this from the cable even while showing another input, but not while
 /// the display is disabled by us -- so call it only while it is connected.
 func setMonitorInput(_ value: Int) -> Bool {
+    if cfg.monitor.ddc == false { return true }          // no DDC on this monitor: nothing to switch
     if fake("keyboards") != nil { log("(test) would set the monitor input to \(hex2(value))"); return true }
     for s in avServices() {
         guard let (vendor, model) = edidIDs(s), Int(vendor) == cfg.monitor.vendor, Int(model) == cfg.monitor.model else { continue }
@@ -185,10 +186,15 @@ func setMonitorInput(_ value: Int) -> Bool {
 
 /// The main monitor's current input (VCP 0x60), nil when it does not answer (asleep, not connected).
 func monitorInput() -> Int? {
-    if fake("keyboards") != nil { return nil }
+    if fake("keyboards") != nil || cfg.monitor.ddc == false { return nil }
+    return readMonitorInput(vendor: cfg.monitor.vendor, model: cfg.monitor.model)
+}
+
+/// VCP 0x60 of the monitor with this EDID id; nil when it does not answer DDC.
+func readMonitorInput(vendor: Int, model: Int) -> Int? {
     for s in avServices() {
-        guard let (vendor, model) = edidIDs(s), Int(vendor) == cfg.monitor.vendor, Int(model) == cfg.monitor.model else { continue }
-        if let v = getVCP(s, 0x60) { return v & 0xFF }
+        guard let (v, m) = edidIDs(s), Int(v) == vendor, Int(m) == model else { continue }
+        if let x = getVCP(s, 0x60) { return x & 0xFF }
     }
     return nil
 }
@@ -485,6 +491,7 @@ func reconcile() {
     // macOS to list the display: a monitor that was switched to the other input can drop out of the
     // list by itself, and only this command brings it back. The command is repeated on a few polls
     // (the link needs a moment to come up), and for up to ~30 s until the monitor answers.
+    if cfg.monitor.ddc == false { needMacInput = 0 }
     if needMacInput > 0 {
         needMacInput -= 1
         // The command is not enough: a monitor asleep on the other input can ignore it. So the

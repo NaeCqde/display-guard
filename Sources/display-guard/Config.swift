@@ -9,6 +9,7 @@ struct Config {
         var model: Int           // EDID product code (G2725D = 0x2014)
         var mac_input: Int       // VCP 0x60 value that shows this Mac (HDMI 1 = 0x11)
         var other_input: Int     // VCP 0x60 value for the other computer (DP 1 = 0x0F)
+        var ddc: Bool?           // false = the monitor does not answer DDC: no input switching (default true)
     }
 
     struct Keyboard: Codable {
@@ -130,6 +131,7 @@ struct Config {
         model       = \(hex(monitor.model))   # EDID product code
         mac_input   = \(hex(monitor.mac_input, 2))     # VCP 0x60 value that shows this Mac (HDMI 1 = 0x11)
         other_input = \(hex(monitor.other_input, 2))     # VCP 0x60 value for the other computer (DP 1 = 0x0F)
+        \(monitor.ddc == false ? "ddc         = false    # this monitor does not answer DDC/CI: only connect / disconnect, no input switching\n        " : "")
 
         # USB devices that tell "the desk is on this Mac": the monitor is used while any of them is seen.
         # Leave `product` out to match every device of the vendor.
