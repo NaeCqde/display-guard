@@ -344,6 +344,64 @@ func updateMainWanted() {
     }
 }
 
+// MARK: - The other PC's power (NanoKVM)
+
+var pcHold = false          // the other PC is off: the monitor is wanted on the Mac even without a keyboard
+var pcOffHandled = false
+
+func minutes(_ hhmm: String?, _ fallback: Int) -> Int {
+    guard let t = hhmm else { return fallback }
+    let p = t.split(separator: ":").compactMap { Int($0) }
+    return p.count == 2 ? p[0] * 60 + p[1] : fallback
+}
+
+func inPCWindow(_ c: Config.PCPower) -> Bool {
+    let now = Calendar.current.dateComponents([.hour, .minute], from: Date())
+    let m = (now.hour ?? 0) * 60 + (now.minute ?? 0)
+    let a = minutes(c.after, 300), b = minutes(c.before, 24 * 60)
+    return a <= b ? (m >= a && m < b) : (m >= a || m < b)
+}
+
+/// nil = not answered.
+func pcPowerOn(_ host: String) -> Bool? {
+    let hp = host.contains(":") ? host : "\(host):80"
+    guard let url = URL(string: "http://\(hp)/api/vm/gpio") else { return nil }
+    var req = URLRequest(url: url); req.timeoutInterval = 2
+    let sem = DispatchSemaphore(value: 0)
+    var out: Bool?
+    URLSession.shared.dataTask(with: req) { data, _, _ in
+        if let data, let j = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let d = j["data"] as? [String: Any], let p = d["pwr"] as? Bool { out = p }
+        sem.signal()
+    }.resume()
+    _ = sem.wait(timeout: .now() + 3)
+    return out
+}
+
+func startPCPowerWatch() {
+    guard let c = cfg.pcPower else { return }
+    let q = DispatchQueue(label: "pc-power")
+    let t = DispatchSource.makeTimerSource(queue: q)
+    t.schedule(deadline: .now() + 2, repeating: max(1, c.interval_s ?? 3))
+    t.setEventHandler {
+        guard let on = pcPowerOn(c.host) else { return }
+        DispatchQueue.main.async {
+            if on {
+                if pcHold || pcOffHandled { log("the other PC is on: back to the keyboard rule") }
+                pcHold = false; pcOffHandled = false
+            } else if !pcOffHandled && inPCWindow(c) {
+                pcOffHandled = true; pcHold = true
+                log("the other PC is off: the monitor goes back to the Mac (input \(hex2(cfg.monitor.mac_input)))")
+                needMacInput = 200; macInputSent = false
+                reconcile()
+            }
+        }
+    }
+    t.resume()
+    pcTimer = t
+}
+var pcTimer: DispatchSourceTimer?
+
 var lastReason = ""
 var connectFails: [CGDirectDisplayID: Int] = [:]
 var wasLocked = false
@@ -385,7 +443,7 @@ func reconcile() {
     let othersWanted = !(locked || busy)
 
     let all = Set(known.keys)
-    var wanted = all.filter { isMain($0) ? mainWanted : othersWanted }
+    var wanted = all.filter { isMain($0) ? (mainWanted || pcHold) : othersWanted }
     if displayList(active: true).isEmpty { wanted = all }   // no display at all: bring everything back
     if wanted.isEmpty {                       // never leave the Mac with no display
         let others = all.filter { !isMain($0) }
@@ -483,6 +541,7 @@ case "run":
     }
     log("display-guard started")
     startUSBWatch()
+    startPCPowerWatch()
     let timer = Timer(timeInterval: cfg.pollInterval, repeats: true) { _ in reconcile() }
     RunLoop.main.add(timer, forMode: .common)
     reconcile()

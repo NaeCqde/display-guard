@@ -28,6 +28,15 @@ struct Config {
         var model: Int           // EDID product code
     }
 
+    /// A NanoKVM (or anything with the same `GET /api/vm/gpio` answer `{"data":{"pwr":bool}}`) that watches the
+    /// other PC's power LED: when it is off, the monitor goes back to the Mac's input.
+    struct PCPower: Codable {
+        var host: String         // "100.67.47.96" or "win-kvm" (port 80), or "host:port"
+        var after: String?       // "HH:MM": watch only from this time on (default 05:00)
+        var before: String?      // "HH:MM": ... until this time (default: until midnight)
+        var interval_s: Double?  // seconds between checks (default 3)
+    }
+
     struct Timing: Codable {
         var poll_interval: Double?
         var recheck_delay_ms: Int?
@@ -42,6 +51,7 @@ struct Config {
         var others: Others?
         var refresh_on_unlock: [Display]?
         var timing: Timing?
+        var pc_power: PCPower?
     }
 
     // The values the program works with, after the defaults are applied.
@@ -57,6 +67,7 @@ struct Config {
     var refreshDelayMs: Int
     var refreshOffMs: Int
     var refreshRepeat: Int
+    var pcPower: PCPower?
 
     static let defaultSunshineAddress = "auto"
     static let defaultPollInterval = 1.5
@@ -96,14 +107,15 @@ struct Config {
             refreshOnUnlock: f.refresh_on_unlock ?? [],
             refreshDelayMs: t?.refresh_delay_ms ?? defaultRefreshDelayMs,
             refreshOffMs: t?.refresh_off_ms ?? defaultRefreshOffMs,
-            refreshRepeat: max(1, t?.refresh_repeat ?? defaultRefreshRepeat)
+            refreshRepeat: max(1, t?.refresh_repeat ?? defaultRefreshRepeat),
+            pcPower: f.pc_power
         )
     }
 
     /// The text `setup` writes. Hex numbers keep the USB / EDID ids readable.
     static func render(monitor: Monitor, keyboards: [Keyboard], othersEnabled: Bool, whenLocked: Bool,
                        whenSunshine: Bool, sunshineAddress: String, refreshOnUnlock: [Display],
-                       pollInterval: Double, recheckDelayMs: Int, refreshDelayMs: Int, refreshOffMs: Int, refreshRepeat: Int = defaultRefreshRepeat) -> String {
+                       pollInterval: Double, recheckDelayMs: Int, refreshDelayMs: Int, refreshOffMs: Int, refreshRepeat: Int = defaultRefreshRepeat, pcPower: PCPower? = nil) -> String {
         func hex(_ v: Int, _ width: Int = 4) -> String {
             "0x" + String(format: "%0\(width)X", v)
         }
@@ -152,6 +164,19 @@ struct Config {
         refresh_repeat   = \(refreshRepeat)   # how many times the refresh is done (the screen wakes by chance)
 
         """
+        if let p = pcPower {
+            s += """
+
+            # The other PC's power, seen by a NanoKVM: from `after` on, the moment it is off the monitor
+            # switches back to the Mac's input (and is connected, even while no keyboard is on this Mac).
+            [pc_power]
+            host       = "\(p.host)"
+            after      = "\(p.after ?? "05:00")"
+
+            """
+            if let b = p.before { s += "before     = \"\(b)\"\n" }
+            if let i = p.interval_s { s += "interval_s = \(i)\n" }
+        }
         return s
     }
 }

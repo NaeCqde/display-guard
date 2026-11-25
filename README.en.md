@@ -93,6 +93,19 @@ refresh_repeat   = 2        # how many times the refresh is done (waking is rand
 
 Without a settings file `run` does not start; run `setup` first.
 
+
+### Back to the Mac when the other PC is off (optional)
+
+A NanoKVM (anything answering `GET /api/vm/gpio` with `{"data":{"pwr":…}}`) watches the other PC's power LED. From `after` on, the moment it is seen off, the monitor goes back to the Mac's input (and is connected even with no keyboard on the Mac). When the PC is on again the keyboard rule applies. A sleeping PC looks "off" too.
+
+```toml
+[pc_power]
+host       = "100.67.47.96"   # the NanoKVM; "host:port" also works (port defaults to 80)
+after      = "05:00"          # watch from this time (default 05:00)
+# before     = "23:00"        # ... until this time (default: midnight)
+# interval_s = 3              # seconds between checks
+```
+
 ## License
 
 MIT
