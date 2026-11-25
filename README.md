@@ -87,7 +87,8 @@ model  = 0x1706
 poll_interval    = 1.5      # ロックと Sunshine の確認間隔(秒)
 recheck_delay_ms = 300      # 切断前の再確認までの待ち(ミリ秒)
 refresh_delay_ms = 1000     # ロック解除から再接続までの待ち(ミリ秒)
-refresh_off_ms   = 4000     # 再接続の間、切断したままにする時間(ミリ秒)
+refresh_off_ms   = 1500     # 再接続の間、切断したままにする時間(ミリ秒)
+refresh_repeat   = 2        # 再接続を繰り返す回数(つくかどうかは運なので複数回)
 ```
 
 設定ファイルがないと、`run` は起動しません。先に `setup` を実行してください。

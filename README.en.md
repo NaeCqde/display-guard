@@ -87,7 +87,8 @@ model  = 0x1706
 poll_interval    = 1.5      # seconds between lock / Sunshine checks
 recheck_delay_ms = 300      # wait before looking again prior to disconnecting
 refresh_delay_ms = 1000     # wait from the unlock to the refresh (ms)
-refresh_off_ms   = 4000     # how long it stays disconnected during the refresh (ms)
+refresh_off_ms   = 1500     # how long it stays disconnected during the refresh (ms)
+refresh_repeat   = 2        # how many times the refresh is done (waking is random, so more than once)
 ```
 
 Without a settings file `run` does not start; run `setup` first.

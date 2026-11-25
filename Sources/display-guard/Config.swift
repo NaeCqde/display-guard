@@ -33,6 +33,7 @@ struct Config {
         var recheck_delay_ms: Int?
         var refresh_delay_ms: Int?
         var refresh_off_ms: Int?
+        var refresh_repeat: Int?
     }
 
     private struct File: Codable {
@@ -55,12 +56,14 @@ struct Config {
     var refreshOnUnlock: [Display]
     var refreshDelayMs: Int
     var refreshOffMs: Int
+    var refreshRepeat: Int
 
     static let defaultSunshineAddress = "auto"
     static let defaultPollInterval = 1.5
     static let defaultRecheckDelayMs = 300
     static let defaultRefreshDelayMs = 1000
-    static let defaultRefreshOffMs = 4000
+    static let defaultRefreshOffMs = 1500
+    static let defaultRefreshRepeat = 2
 
     static var path: URL {
         if let p = ProcessInfo.processInfo.environment["DISPLAY_GUARD_CONFIG"], !p.isEmpty {
@@ -92,14 +95,15 @@ struct Config {
             recheckDelay: useconds_t((t?.recheck_delay_ms ?? defaultRecheckDelayMs) * 1000),
             refreshOnUnlock: f.refresh_on_unlock ?? [],
             refreshDelayMs: t?.refresh_delay_ms ?? defaultRefreshDelayMs,
-            refreshOffMs: t?.refresh_off_ms ?? defaultRefreshOffMs
+            refreshOffMs: t?.refresh_off_ms ?? defaultRefreshOffMs,
+            refreshRepeat: max(1, t?.refresh_repeat ?? defaultRefreshRepeat)
         )
     }
 
     /// The text `setup` writes. Hex numbers keep the USB / EDID ids readable.
     static func render(monitor: Monitor, keyboards: [Keyboard], othersEnabled: Bool, whenLocked: Bool,
                        whenSunshine: Bool, sunshineAddress: String, refreshOnUnlock: [Display],
-                       pollInterval: Double, recheckDelayMs: Int, refreshDelayMs: Int, refreshOffMs: Int) -> String {
+                       pollInterval: Double, recheckDelayMs: Int, refreshDelayMs: Int, refreshOffMs: Int, refreshRepeat: Int = defaultRefreshRepeat) -> String {
         func hex(_ v: Int, _ width: Int = 4) -> String {
             "0x" + String(format: "%0\(width)X", v)
         }
@@ -145,6 +149,7 @@ struct Config {
         recheck_delay_ms = \(recheckDelayMs)   # look again before disconnecting, to ride out a USB re-enumeration
         refresh_delay_ms = \(refreshDelayMs)   # wait after the unlock before the refresh
         refresh_off_ms   = \(refreshOffMs)   # how long the display stays disconnected during the refresh
+        refresh_repeat   = \(refreshRepeat)   # how many times the refresh is done (the screen wakes by chance)
 
         """
         return s
