@@ -106,6 +106,17 @@ func isMain(_ id: CGDirectDisplayID) -> Bool {
     return known[id] == "\(c.monitor.vendor):\(c.monitor.model)"
 }
 
+/// Monitors that follow the keyboard rule: the main one and every input switch.
+func isManaged(_ id: CGDirectDisplayID) -> Bool {
+    guard let c = cfg, let k = known[id] else { return false }
+    return isMain(id) || c.switches.contains { $0.key == k }
+}
+
+func switchFor(_ id: CGDirectDisplayID) -> Config.InputSwitch? {
+    guard let c = cfg, let k = known[id] else { return nil }
+    return c.switches.first { $0.key == k }
+}
+
 func refreshKnown() {
     let online = displayList(active: false)
     for id in online { known[id] = "\(CGDisplayVendorNumber(id)):\(CGDisplayModelNumber(id))" }
@@ -167,14 +178,13 @@ func getVCP(_ s: CFTypeRef, _ code: UInt8) -> Int? {
     return nil
 }
 
-/// Sets the main monitor's input source (VCP 0x60) over DDC/CI. The monitor
-/// accepts this from the cable even while showing another input, but not while
-/// the display is disabled by us -- so call it only while it is connected.
-func setMonitorInput(_ value: Int) -> Bool {
-    if cfg.monitor.ddc == false { return true }          // no DDC on this monitor: nothing to switch
-    if fake("keyboards") != nil { log("(test) would set the monitor input to \(hex2(value))"); return true }
+/// Sets a monitor's input source (VCP 0x60) over DDC/CI. The monitor accepts this from the cable
+/// even while showing another input, but not while the display is disabled by us -- so call it
+/// only while it is connected.
+func setMonitorInput(_ sw: Config.InputSwitch, _ value: Int) -> Bool {
+    if fake("keyboards") != nil { log("(test) would set the monitor \(sw.key) to \(hex2(value))"); return true }
     for s in avServices() {
-        guard let (vendor, model) = edidIDs(s), Int(vendor) == cfg.monitor.vendor, Int(model) == cfg.monitor.model else { continue }
+        guard let (vendor, model) = edidIDs(s), Int(vendor) == sw.vendor, Int(model) == sw.model else { continue }
         var req: [UInt8] = [0x84, 0x03, 0x60, UInt8(value >> 8), UInt8(value & 255)]
         var ck: UInt8 = 0x6E ^ 0x51
         for b in req { ck ^= b }
@@ -184,14 +194,21 @@ func setMonitorInput(_ value: Int) -> Bool {
     return false
 }
 
-/// The main monitor's current input (VCP 0x60), nil when it does not answer (asleep, not connected).
-func monitorInput() -> Int? {
-    if fake("keyboards") != nil || cfg.monitor.ddc == false { return nil }
-    return readMonitorInput(vendor: cfg.monitor.vendor, model: cfg.monitor.model)
+/// The monitor's current input (VCP 0x60), nil when it does not answer (asleep, not connected).
+func monitorInput(_ sw: Config.InputSwitch) -> Int? {
+    if fake("keyboards") != nil { return nil }
+    return readMonitorInput(vendor: sw.vendor, model: sw.model)
 }
 
 /// VCP 0x60 of the monitor with this EDID id; nil when it does not answer DDC.
 func readMonitorInput(vendor: Int, model: Int) -> Int? {
+    if let f = fake("ddc") {                              // test: "vendor:model:value,..." in decimal
+        for e in f.split(separator: ",") {
+            let p = e.split(separator: ":").compactMap { Int($0) }
+            if p.count == 3, p[0] == vendor, p[1] == model { return p[2] }
+        }
+        return nil
+    }
     for s in avServices() {
         guard let (v, m) = edidIDs(s), Int(v) == vendor, Int(m) == model else { continue }
         if let x = getVCP(s, 0x60) { return x & 0xFF }
@@ -323,8 +340,15 @@ func sunshineBusy() -> Bool {
 // MARK: - Decision
 
 var mainWanted = true
-var needMacInput = 0               // polls left to (re)send "input = HDMI 1" after the keyboards are back
-var macInputSent = false
+var needMacInput = 0               // polls left to (re)send "input = Mac" after the keyboards are back
+var macPending: Set<String> = []   // input switches (vendor:model) not yet confirmed to show the Mac
+var macLogged: Set<String> = []
+
+func wantMacInputs(_ list: [Config.InputSwitch]) {
+    guard !list.isEmpty else { return }
+    macPending.formUnion(list.map(\.key)); macLogged.subtract(list.map(\.key))
+    needMacInput = 200
+}
 var pendingMain: Bool? = nil
 var pendingCount = 0
 
@@ -340,13 +364,15 @@ func updateMainWanted() {
     pendingMain = nil; pendingCount = 0
     mainWanted = want
     if want {
-        log("a keyboard is back: reconnecting the monitor, then switching it to \(hex2(cfg.monitor.mac_input))")
-        needMacInput = 200; macInputSent = false
+        log("a keyboard is back: reconnecting the monitor\(cfg.switches.isEmpty ? "" : ", then switching its input to the Mac")")
+        wantMacInputs(cfg.switches)
     } else {
-        log("no keyboard on the Mac: switching the monitor to \(hex2(cfg.monitor.other_input)), then disconnecting it")
-        needMacInput = 0
-        for _ in 0..<3 { if setMonitorInput(cfg.monitor.other_input) { break }; usleep(300_000) }
-        usleep(500_000)                       // let the monitor leave HDMI before the display is removed
+        log("no keyboard on the Mac: \(cfg.switches.isEmpty ? "" : "switching the inputs to the other computer, then ")disconnecting the monitor")
+        needMacInput = 0; macPending = []
+        for sw in cfg.switches {
+            for _ in 0..<3 { if setMonitorInput(sw, sw.other_input) { break }; usleep(300_000) }
+        }
+        if !cfg.switches.isEmpty { usleep(500_000) }   // let the monitors leave the input before the displays are removed
     }
 }
 
@@ -397,8 +423,8 @@ func startPCPowerWatch() {
                 pcHold = false; pcOffHandled = false
             } else if !pcOffHandled && inPCWindow(c) {
                 pcOffHandled = true; pcHold = true
-                log("the other PC is off: the monitor goes back to the Mac (input \(hex2(cfg.monitor.mac_input)))")
-                needMacInput = 200; macInputSent = false
+                log("the other PC is off: the monitors go back to the Mac")
+                wantMacInputs(cfg.switches)
                 reconcile()
             }
         }
@@ -437,7 +463,7 @@ func refreshListedDisplays() {
             else { log("FAILED to connect display \(id) after the refresh") }
             if round + 1 < cfg.refreshRepeat { sleep(3) }
         }
-        if isMain(id) { needMacInput = 200; macInputSent = false }
+        if let sw = switchFor(id) { wantMacInputs([sw]) }
     }
 }
 
@@ -449,10 +475,10 @@ func reconcile() {
     let othersWanted = !(locked || busy)
 
     let all = Set(known.keys)
-    var wanted = all.filter { isMain($0) ? (mainWanted || pcHold) : othersWanted }
+    var wanted = all.filter { isManaged($0) ? (mainWanted || pcHold) : othersWanted }
     if displayList(active: true).isEmpty { wanted = all }   // no display at all: bring everything back
     if wanted.isEmpty {                       // never leave the Mac with no display
-        let others = all.filter { !isMain($0) }
+        let others = all.filter { !isManaged($0) }
         wanted = others.isEmpty ? all : others
     }
 
@@ -491,20 +517,22 @@ func reconcile() {
     // macOS to list the display: a monitor that was switched to the other input can drop out of the
     // list by itself, and only this command brings it back. The command is repeated on a few polls
     // (the link needs a moment to come up), and for up to ~30 s until the monitor answers.
-    if cfg.monitor.ddc == false { needMacInput = 0 }
     if needMacInput > 0 {
         needMacInput -= 1
-        // The command is not enough: a monitor asleep on the other input can ignore it. So the
-        // input is read back, and the command is repeated until the monitor says it shows the Mac's
-        // input (up to ~5 minutes, then it gives up).
-        let sent = setMonitorInput(cfg.monitor.mac_input)
-        if sent && !macInputSent { log("monitor input -> \(hex2(cfg.monitor.mac_input)) sent"); macInputSent = true }
-        if sent, fake("keyboards") != nil || monitorInput() == cfg.monitor.mac_input {
-            log("monitor input is \(hex2(cfg.monitor.mac_input)): confirmed")
-            needMacInput = 0
-        } else if needMacInput == 0 {
-            log("FAILED to switch the monitor to \(hex2(cfg.monitor.mac_input)): it did not confirm (asleep, or not connected to this Mac?)")
+        // The command is not enough: a monitor asleep on the other input can ignore it. So the input
+        // is read back, and the command is repeated until the monitor says it shows the Mac's input
+        // (up to ~5 minutes, then it gives up).
+        for sw in cfg.switches where macPending.contains(sw.key) {
+            let sent = setMonitorInput(sw, sw.mac_input)
+            if sent && !macLogged.contains(sw.key) { log("monitor \(sw.key) input -> \(hex2(sw.mac_input)) sent"); macLogged.insert(sw.key) }
+            if sent, fake("keyboards") != nil || monitorInput(sw) == sw.mac_input {
+                log("monitor \(sw.key) input is \(hex2(sw.mac_input)): confirmed")
+                macPending.remove(sw.key)
+            } else if needMacInput == 0 {
+                log("FAILED to switch the monitor \(sw.key) to \(hex2(sw.mac_input)): it did not confirm (asleep, or not connected to this Mac?)")
+            }
         }
+        if macPending.isEmpty { needMacInput = 0 }
     }
 }
 
@@ -522,7 +550,7 @@ case "restore":
 case "status":
     cfg = try? Config.load()
     refreshKnown()
-    log("displays: \(known.map { "\($0.key)=\($0.value)\(isMain($0.key) ? "(main)" : "")" }.sorted())")
+    log("displays: \(known.map { "\($0.key)=\($0.value)\(isMain($0.key) ? "(main)" : "")\(switchFor($0.key) != nil ? "(input switch)" : "")" }.sorted())")
     log("active: \(displayList(active: true))  disabled-by-us: \(disabled.sorted())")
     if cfg == nil {
         log("no settings file (\(Config.path.path)): run `display-guard setup`")

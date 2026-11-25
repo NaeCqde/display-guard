@@ -8,15 +8,15 @@ A small resident tool for macOS that keeps the system from treating a display th
 
 | Situation | Action |
 |---|---|
-| None of the chosen USB devices (keyboards and the like) is visible to the Mac | Switch the main monitor to another input (e.g. DP 1) over DDC, then disconnect it |
-| One of them is back | Reconnect the main monitor and switch it to the Mac's input (e.g. HDMI 1) over DDC |
+| None of the chosen USB devices (keyboards and the like) is visible to the Mac | Disconnect the main monitor and the input-switch monitors; an input-switch monitor is first switched to another input (e.g. DP 1) over DDC |
+| One of them is back | Reconnect them; an input-switch monitor is switched to the Mac's input (e.g. HDMI 1) over DDC (read back and repeated until it shows) |
 | The Mac is locked (can be turned off in the settings) | Disconnect every display except the main monitor |
 | Sunshine has a session (can be turned off in the settings) | Disconnect every display except the main monitor |
 | Back to normal | Reconnect |
 | The Mac is unlocked (the listed monitors only) | After a short wait, disconnect each listed monitor and connect it again. For a monitor that stays dark although it was reconnected |
 
 - "Disconnect" is `CGSConfigureDisplayEnabled` (a private API).
-- The input is switched with DDC/CI through IOAVService (a VCP 0x60 write). Reading the input back is not reliable on this monitor, so it is not used; the USB devices are the cue.
+- The input is switched with DDC/CI through IOAVService (a VCP 0x60 write). The direction is decided by the USB devices; only when going back to the Mac is the input (VCP 0x60) read back and the command repeated until it shows.
 - It never leaves the Mac with zero active displays.
 - USB changes arrive as IOKit notifications; the lock state and Sunshine are checked every 1.5 s.
 
@@ -53,7 +53,7 @@ A binary on an external volume can hang when launched by launchd; keep it in `~/
 
 `display-guard setup` asks these steps and writes `~/.config/display-guard/config.toml` (arrows move, space selects, return goes on):
 
-1. The main monitor, and its input values
+1. The main monitor → the monitors whose input is switched (only monitors that answer DDC are listed; the main one need not be among them; each gets its input values, the current input is the default)
 2. The USB devices (several allowed)
 3. Disconnect the other displays too? -> the conditions (while locked / while a Sunshine session runs) -> the Sunshine address (default `auto`)
 4. Monitors that stay dark after the unlock (a list to pick several from; none: just press return) → the waits
@@ -63,11 +63,16 @@ A binary on an external volume can hang when launched by launchd; keep it in `~/
 The file can be edited by hand (`DISPLAY_GUARD_CONFIG` moves it).
 
 ```toml
-[monitor]
+[monitor]              # the main monitor (disconnected when no USB device is on this Mac)
 vendor      = 0x10AC   # EDID vendor id (Dell)
 model       = 0x2014   # EDID product code (G2725D)
+
+[[input_switch]]       # monitors whose input is switched over DDC (any number, main included or not)
+vendor      = 0x10AC
+model       = 0x2014
 mac_input   = 0x11     # input that shows this Mac (HDMI 1)
 other_input = 0x0F     # input that shows the other computer (DP 1)
+# The older form (mac_input / other_input inside [monitor]) is still read; the main monitor is then the switch.
 
 [[keyboard]]           # several allowed; the monitor is used while any is seen
 vendor  = 0x3151

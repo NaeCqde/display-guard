@@ -101,30 +101,44 @@ func runSetup() {
         title: tt(tr("1. メインモニター", "1. Main monitor")),
         question: tt(tr("USB機器が無いときに切断するモニターを選んでください", "Which monitor should be disconnected when no USB device is on this Mac?")),
         options: monitors,
-        description: tt(tr("切断・再接続する対象です(DDCに応答するモニターなら入力も切り替えます)。現在つながっているものだけが出ます。",
-                           "It is disconnected / reconnected (and switched between inputs over DDC if it answers DDC). Only the connected displays are listed.")),
+        description: tt(tr("USB機器が無いとき切断・再接続する対象です。現在つながっているものだけが出ます。入力の切り替えは次の質問で選びます。",
+                           "It is disconnected / reconnected. Only the connected displays are listed. Input switching is chosen in the next question.")),
         collapseOnSelection: true, filterMode: .disabled, autoselectSingleChoice: false)
 
-    // The input prompts only make sense for a monitor that answers DDC/CI: ask it first.
-    let current = readMonitorInput(vendor: monitor.vendor, model: monitor.model)
-    var macInput = 0x11, otherInput = 0x0F
-    let ddc = current != nil
-    if let current {
-        print(tr("  このモニターはDDCに応答しました(現在の入力: 0x\(String(current, radix: 16, uppercase: true)))。",
-                 "  This monitor answers DDC (current input: 0x\(String(current, radix: 16, uppercase: true)))."))
-        macInput = ask(noora, title: tr("1. 入力", "1. Inputs"),
-            prompt: tr("このMacを映す入力の値(VCP 0x60)", "Input value that shows this Mac (VCP 0x60)"),
-            description: tr("HDMI 1 = 0x11, HDMI 2 = 0x12, DP 1 = 0x0F, DP 2 = 0x10, USB-C = 0x1B(モニターにより異なります)。いまMacが映っているなら、現在の値がそのまま使えます。",
-                            "HDMI 1 = 0x11, HDMI 2 = 0x12, DP 1 = 0x0F, DP 2 = 0x10, USB-C = 0x1B (it depends on the monitor). If the Mac is shown now, the current value is the one."),
-            defaultValue: "0x" + String(current, radix: 16, uppercase: true)) { v in parseInt(v).flatMap { (0...0xFFFF).contains($0) ? $0 : nil } }
-        otherInput = ask(noora, title: tr("1. 入力", "1. Inputs"),
-            prompt: tr("もう1台のコンピューターを映す入力の値", "Input value that shows the other computer"),
-            description: tr("USB機器がMacから外れたときに、モニターをこの入力に切り替えてから切断します。",
-                            "When the USB devices leave the Mac, the monitor is switched to this input before it is disconnected."),
-            defaultValue: "0x0F") { v in parseInt(v).flatMap { (0...0xFFFF).contains($0) ? $0 : nil } }
+    // Input switching: any number of monitors, only those that answer DDC/CI (asked now), main or not.
+    var currents: [String: Int] = [:]
+    for m in monitors { if let v = readMonitorInput(vendor: m.vendor, model: m.model) { currents["\(m.vendor):\(m.model)"] = v } }
+    let ddcMonitors = monitors.filter { currents["\($0.vendor):\($0.model)"] != nil }
+    var switches: [Config.InputSwitch] = []
+    if ddcMonitors.isEmpty {
+        print(tr("  DDCに応答するモニターがないので、入力の自動切り替えは設定しません。",
+                 "  No monitor answers DDC, so input switching is not set up."))
     } else {
-        print(tr("  このモニターはDDCに応答しません。入力の切り替えは行わず、接続・切断だけにします。",
-                 "  This monitor does not answer DDC: no input switching, only connect / disconnect."))
+        let picked = noora.multipleChoicePrompt(
+            title: tt(tr("1. 入力の自動切り替え", "1. Input switching")),
+            question: tt(tr("入力を自動で切り替えるモニターを選んでください(なければ何も選ばずEnter)",
+                            "Which monitors should have their input switched? (none: just press return)")),
+            options: ddcMonitors,
+            description: tt(tr("DDCに応答するモニターだけが出ます。メインモニターを選ばなくても構いません。USB機器がMacから外れると、選んだモニターはもう1台の入力に切り替えてから切断され、戻ると再接続してMacの入力に切り替えます。",
+                               "Only monitors that answer DDC are listed. The main monitor need not be among them. When the USB devices leave the Mac, each chosen monitor is switched to the other input and then disconnected; when they are back it is connected and switched to the Mac's input.")),
+            collapseOnSelection: true, filterMode: .disabled,
+            maxLimit: .unlimited, minLimit: .unlimited)
+        for m in picked {
+            let cur = currents["\(m.vendor):\(m.model)"] ?? 0x11
+            let curHex = "0x" + String(cur, radix: 16, uppercase: true)
+            print(tr("  \(m.label) の現在の入力: \(curHex)", "  \(m.label) shows input \(curHex) now"))
+            let mac: Int = ask(noora, title: tr("1. 入力 — \(m.label)", "1. Inputs — \(m.label)"),
+                prompt: tr("このMacを映す入力の値(VCP 0x60)", "Input value that shows this Mac (VCP 0x60)"),
+                description: tr("HDMI 1 = 0x11, HDMI 2 = 0x12, DP 1 = 0x0F, DP 2 = 0x10, USB-C = 0x1B(モニターにより異なります)。いまMacが映っているなら、現在の値がそのまま使えます。",
+                                "HDMI 1 = 0x11, HDMI 2 = 0x12, DP 1 = 0x0F, DP 2 = 0x10, USB-C = 0x1B (it depends on the monitor). If the Mac is shown now, the current value is the one."),
+                defaultValue: curHex) { v in parseInt(v).flatMap { (0...0xFFFF).contains($0) ? $0 : nil } }
+            let other: Int = ask(noora, title: tr("1. 入力 — \(m.label)", "1. Inputs — \(m.label)"),
+                prompt: tr("もう1台のコンピューターを映す入力の値", "Input value that shows the other computer"),
+                description: tr("USB機器がMacから外れたときに、このモニターをこの入力に切り替えてから切断します。",
+                                "When the USB devices leave the Mac, this monitor is switched to this input before it is disconnected."),
+                defaultValue: mac == 0x0F ? "0x11" : "0x0F") { v in parseInt(v).flatMap { (0...0xFFFF).contains($0) ? $0 : nil } }
+            switches.append(.init(vendor: m.vendor, model: m.model, mac_input: mac, other_input: other))
+        }
     }
 
     // 2. USB devices
@@ -226,7 +240,8 @@ func runSetup() {
     }
 
     let text = Config.render(
-        monitor: .init(vendor: monitor.vendor, model: monitor.model, mac_input: macInput, other_input: otherInput, ddc: ddc ? nil : false),
+        monitor: .init(vendor: monitor.vendor, model: monitor.model),
+        switches: switches,
         keyboards: chosen.map { .init(vendor: $0.vendor, product: $0.product) },
         othersEnabled: othersEnabled && !conditions.isEmpty,
         whenLocked: conditions.contains(.locked),

@@ -4,12 +4,24 @@ import TOMLDecoder
 /// The settings file: `~/.config/display-guard/config.toml` (or the path in
 /// `DISPLAY_GUARD_CONFIG`). `display-guard setup` writes it.
 struct Config {
+    /// The main monitor: disconnected while no listed USB device is on this Mac.
     struct Monitor: Codable {
         var vendor: Int          // EDID vendor id as CoreGraphics reports it (Dell = 0x10AC)
         var model: Int           // EDID product code (G2725D = 0x2014)
+        // Older files put the inputs here (the main monitor then is also an input switch).
+        var mac_input: Int?
+        var other_input: Int?
+        var ddc: Bool?
+    }
+
+    /// A monitor whose input is switched over DDC/CI: to `other_input` before it is disconnected
+    /// (no listed USB device on this Mac), back to `mac_input` after it is connected again.
+    struct InputSwitch: Codable {
+        var vendor: Int
+        var model: Int
         var mac_input: Int       // VCP 0x60 value that shows this Mac (HDMI 1 = 0x11)
         var other_input: Int     // VCP 0x60 value for the other computer (DP 1 = 0x0F)
-        var ddc: Bool?           // false = the monitor does not answer DDC: no input switching (default true)
+        var key: String { "\(vendor):\(model)" }
     }
 
     struct Keyboard: Codable {
@@ -48,6 +60,7 @@ struct Config {
 
     private struct File: Codable {
         var monitor: Monitor
+        var input_switch: [InputSwitch]?
         var keyboard: [Keyboard]
         var others: Others?
         var refresh_on_unlock: [Display]?
@@ -57,6 +70,7 @@ struct Config {
 
     // The values the program works with, after the defaults are applied.
     var monitor: Monitor
+    var switches: [InputSwitch]
     var keyboards: [Keyboard]
     var othersEnabled: Bool
     var whenLocked: Bool
@@ -98,6 +112,12 @@ struct Config {
         let o = f.others, t = f.timing
         return Config(
             monitor: f.monitor,
+            switches: f.input_switch ?? {
+                if let m = f.monitor.mac_input, let o = f.monitor.other_input, f.monitor.ddc != false {
+                    return [InputSwitch(vendor: f.monitor.vendor, model: f.monitor.model, mac_input: m, other_input: o)]
+                }
+                return []
+            }(),
             keyboards: f.keyboard,
             othersEnabled: o?.enabled ?? true,
             whenLocked: o?.when_locked ?? true,
@@ -114,7 +134,7 @@ struct Config {
     }
 
     /// The text `setup` writes. Hex numbers keep the USB / EDID ids readable.
-    static func render(monitor: Monitor, keyboards: [Keyboard], othersEnabled: Bool, whenLocked: Bool,
+    static func render(monitor: Monitor, switches: [InputSwitch] = [], keyboards: [Keyboard], othersEnabled: Bool, whenLocked: Bool,
                        whenSunshine: Bool, sunshineAddress: String, refreshOnUnlock: [Display],
                        pollInterval: Double, recheckDelayMs: Int, refreshDelayMs: Int, refreshOffMs: Int, refreshRepeat: Int = defaultRefreshRepeat, pcPower: PCPower? = nil) -> String {
         func hex(_ v: Int, _ width: Int = 4) -> String {
@@ -124,14 +144,20 @@ struct Config {
         var s = """
         # display-guard settings (written by `display-guard setup`)
 
-        # The main monitor: disconnected while no listed USB device is on this Mac,
-        # and switched between the two inputs over DDC/CI.
+        # The main monitor: disconnected while no listed USB device is on this Mac.
         [monitor]
-        vendor      = \(hex(monitor.vendor))   # EDID vendor id
-        model       = \(hex(monitor.model))   # EDID product code
-        mac_input   = \(hex(monitor.mac_input, 2))     # VCP 0x60 value that shows this Mac (HDMI 1 = 0x11)
-        other_input = \(hex(monitor.other_input, 2))     # VCP 0x60 value for the other computer (DP 1 = 0x0F)
-        \(monitor.ddc == false ? "ddc         = false    # this monitor does not answer DDC/CI: only connect / disconnect, no input switching\n        " : "")
+        vendor = \(hex(monitor.vendor))   # EDID vendor id
+        model  = \(hex(monitor.model))   # EDID product code
+
+        # Monitors whose input is switched over DDC/CI (any number, the main monitor included or not):
+        # to other_input before they are disconnected, back to mac_input after they are connected again.
+        # They are disconnected and connected like the main monitor. None = no input switching.
+
+        """
+        for sw in switches {
+            s += "[[input_switch]]\nvendor      = \(hex(sw.vendor))\nmodel       = \(hex(sw.model))\nmac_input   = \(hex(sw.mac_input, 2))     # VCP 0x60 value that shows this Mac (HDMI 1 = 0x11)\nother_input = \(hex(sw.other_input, 2))     # VCP 0x60 value for the other computer (DP 1 = 0x0F)\n\n"
+        }
+        s += """
 
         # USB devices that tell "the desk is on this Mac": the monitor is used while any of them is seen.
         # Leave `product` out to match every device of the vendor.
