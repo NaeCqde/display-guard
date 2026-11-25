@@ -60,7 +60,7 @@ struct Config {
     static let defaultPollInterval = 1.5
     static let defaultRecheckDelayMs = 300
     static let defaultRefreshDelayMs = 1000
-    static let defaultRefreshOffMs = 2000
+    static let defaultRefreshOffMs = 8000
 
     static var path: URL {
         if let p = ProcessInfo.processInfo.environment["DISPLAY_GUARD_CONFIG"], !p.isEmpty {

@@ -333,6 +333,7 @@ func updateMainWanted() {
 }
 
 var lastReason = ""
+var connectFails: [CGDirectDisplayID: Int] = [:]
 var wasLocked = false
 
 /// A display that was connected again by us can stay dark after the unlock (the monitor does not
@@ -390,8 +391,16 @@ func reconcile() {
     for id in all.sorted() {
         let should = wanted.contains(id), isOn = active.contains(id)
         if should && !isOn {
-            if setEnabled(id, true) { disabled.remove(id); saveDisabled(disabled); log("connected display \(id)") }
-            else { log("FAILED to connect display \(id)") }
+            if setEnabled(id, true) { disabled.remove(id); saveDisabled(disabled); connectFails[id] = nil; log("connected display \(id)") }
+            else {
+                // An id that macOS no longer knows (stale entry) must not be retried forever.
+                connectFails[id, default: 0] += 1
+                if connectFails[id]! <= 3 { log("FAILED to connect display \(id)") }
+                if connectFails[id]! >= 10, !displayList(active: false).contains(id) {
+                    log("display \(id) is gone: forgetting it")
+                    known[id] = nil; disabled.remove(id); saveDisabled(disabled); connectFails[id] = nil
+                }
+            }
         } else if !should && isOn {
             disabled.insert(id); saveDisabled(disabled)           // record first: crash-safe
             if setEnabled(id, false) { log("disconnected display \(id)") }
