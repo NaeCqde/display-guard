@@ -110,14 +110,21 @@ func refreshKnown() {
     let online = displayList(active: false)
     for id in online { known[id] = "\(CGDisplayVendorNumber(id)):\(CGDisplayModelNumber(id))" }
     // Forget displays that were unplugged (not online and not disabled by us).
-    for id in known.keys where !online.contains(id) && !disabled.contains(id) { known[id] = nil }
+    // A display on the refresh list is kept too: macOS can drop it from the online list by itself
+    // (dark monitor after the lock), and enabling its id again is what brings it back.
+    for id in known.keys where !online.contains(id) && !disabled.contains(id) {
+        if let d = known[id], let c = cfg, c.refreshOnUnlock.contains(where: { d == "\($0.vendor):\($0.model)" }) { continue }
+        known[id] = nil
+    }
 }
 
 func restoreAll() {
     for id in disabled {
         if setEnabled(id, true) { log("restored display \(id)") } else { log("FAILED to restore display \(id)") }
     }
-    disabled = disabled.filter { !displayList(active: true).contains($0) }
+    // A stale id (macOS no longer knows it) can never be restored: forget it.
+    let online = displayList(active: false)
+    disabled = disabled.filter { !displayList(active: true).contains($0) && online.contains($0) }
     saveDisabled(disabled)
 }
 
@@ -174,6 +181,16 @@ func setMonitorInput(_ value: Int) -> Bool {
         return IOAVServiceWriteI2C(s, 0x37, 0x51, req, UInt32(req.count)) == 0
     }
     return false
+}
+
+/// The main monitor's current input (VCP 0x60), nil when it does not answer (asleep, not connected).
+func monitorInput() -> Int? {
+    if fake("keyboards") != nil { return nil }
+    for s in avServices() {
+        guard let (vendor, model) = edidIDs(s), Int(vendor) == cfg.monitor.vendor, Int(model) == cfg.monitor.model else { continue }
+        if let v = getVCP(s, 0x60) { return v & 0xFF }
+    }
+    return nil
 }
 
 // MARK: - USB devices (the keyboards)
@@ -318,7 +335,7 @@ func updateMainWanted() {
     mainWanted = want
     if want {
         log("a keyboard is back: reconnecting the monitor, then switching it to \(hex2(cfg.monitor.mac_input))")
-        needMacInput = 20; macInputSent = false
+        needMacInput = 200; macInputSent = false
     } else {
         log("no keyboard on the Mac: switching the monitor to \(hex2(cfg.monitor.other_input)), then disconnecting it")
         needMacInput = 0
@@ -327,7 +344,66 @@ func updateMainWanted() {
     }
 }
 
+// MARK: - The other PC's power (NanoKVM)
+
+var pcHold = false          // the other PC is off: the monitor is wanted on the Mac even without a keyboard
+var pcOffHandled = false
+
+func minutes(_ hhmm: String?, _ fallback: Int) -> Int {
+    guard let t = hhmm else { return fallback }
+    let p = t.split(separator: ":").compactMap { Int($0) }
+    return p.count == 2 ? p[0] * 60 + p[1] : fallback
+}
+
+func inPCWindow(_ c: Config.PCPower) -> Bool {
+    let now = Calendar.current.dateComponents([.hour, .minute], from: Date())
+    let m = (now.hour ?? 0) * 60 + (now.minute ?? 0)
+    let a = minutes(c.after, 300), b = minutes(c.before, 24 * 60)
+    return a <= b ? (m >= a && m < b) : (m >= a || m < b)
+}
+
+/// nil = not answered.
+func pcPowerOn(_ host: String) -> Bool? {
+    let hp = host.contains(":") ? host : "\(host):80"
+    guard let url = URL(string: "http://\(hp)/api/vm/gpio") else { return nil }
+    var req = URLRequest(url: url); req.timeoutInterval = 2
+    let sem = DispatchSemaphore(value: 0)
+    var out: Bool?
+    URLSession.shared.dataTask(with: req) { data, _, _ in
+        if let data, let j = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let d = j["data"] as? [String: Any], let p = d["pwr"] as? Bool { out = p }
+        sem.signal()
+    }.resume()
+    _ = sem.wait(timeout: .now() + 3)
+    return out
+}
+
+func startPCPowerWatch() {
+    guard let c = cfg.pcPower else { return }
+    let q = DispatchQueue(label: "pc-power")
+    let t = DispatchSource.makeTimerSource(queue: q)
+    t.schedule(deadline: .now() + 2, repeating: max(1, c.interval_s ?? 3))
+    t.setEventHandler {
+        guard let on = pcPowerOn(c.host) else { return }
+        DispatchQueue.main.async {
+            if on {
+                if pcHold || pcOffHandled { log("the other PC is on: back to the keyboard rule") }
+                pcHold = false; pcOffHandled = false
+            } else if !pcOffHandled && inPCWindow(c) {
+                pcOffHandled = true; pcHold = true
+                log("the other PC is off: the monitor goes back to the Mac (input \(hex2(cfg.monitor.mac_input)))")
+                needMacInput = 200; macInputSent = false
+                reconcile()
+            }
+        }
+    }
+    t.resume()
+    pcTimer = t
+}
+var pcTimer: DispatchSourceTimer?
+
 var lastReason = ""
+var connectFails: [CGDirectDisplayID: Int] = [:]
 var wasLocked = false
 
 /// A display that was connected again by us can stay dark after the unlock (the monitor does not
@@ -337,22 +413,25 @@ func refreshListedDisplays() {
     refreshKnown()
     for id in displayList(active: false).sorted() {
         guard let d = known[id], cfg.refreshOnUnlock.contains(where: { d == "\($0.vendor):\($0.model)" }) else { continue }
-        let active = displayList(active: true)
-        if fake("locked") != nil { log("(test) would refresh display \(id)"); continue }
-        // Also when it is the only active display (the main monitor often is not listed after the lock):
-        // that is when a dark screen hurts most. The Mac keeps running without a display for the
-        // off time, and the display is connected again at once, with retries.
-        if active.contains(id) {
-            if active.count < 2 { log("display \(id) is the only active one: refreshing it anyway") }
-            disabled.insert(id); saveDisabled(disabled)                    // record first: crash-safe
-            guard setEnabled(id, false) else { disabled.remove(id); saveDisabled(disabled); log("FAILED to disconnect display \(id) for the refresh"); continue }
-            usleep(useconds_t(cfg.refreshOffMs * 1000))
+        for round in 0..<cfg.refreshRepeat {
+            let active = displayList(active: true)
+            if fake("locked") != nil { log("(test) would refresh display \(id)"); continue }
+            // Also when it is the only active display (the main monitor often is not listed after the lock):
+            // that is when a dark screen hurts most. The Mac keeps running without a display for the
+            // off time, and the display is connected again at once, with retries.
+            if active.contains(id) {
+                if active.count < 2 { log("display \(id) is the only active one: refreshing it anyway") }
+                disabled.insert(id); saveDisabled(disabled)                    // record first: crash-safe
+                guard setEnabled(id, false) else { disabled.remove(id); saveDisabled(disabled); log("FAILED to disconnect display \(id) for the refresh"); continue }
+                usleep(useconds_t(cfg.refreshOffMs * 1000))
+            }
+            var back = false
+            for _ in 0..<5 { if setEnabled(id, true) { back = true; break }; usleep(1_000_000) }
+            if back { disabled.remove(id); saveDisabled(disabled); log("refreshed display \(id)") }
+            else { log("FAILED to connect display \(id) after the refresh") }
+            if round + 1 < cfg.refreshRepeat { sleep(3) }
         }
-        var back = false
-        for _ in 0..<5 { if setEnabled(id, true) { back = true; break }; usleep(1_000_000) }
-        if back { disabled.remove(id); saveDisabled(disabled); log("refreshed display \(id)") }
-        else { log("FAILED to connect display \(id) after the refresh") }
-        if isMain(id) { needMacInput = 20; macInputSent = false }
+        if isMain(id) { needMacInput = 200; macInputSent = false }
     }
 }
 
@@ -364,7 +443,7 @@ func reconcile() {
     let othersWanted = !(locked || busy)
 
     let all = Set(known.keys)
-    var wanted = all.filter { isMain($0) ? mainWanted : othersWanted }
+    var wanted = all.filter { isMain($0) ? (mainWanted || pcHold) : othersWanted }
     if displayList(active: true).isEmpty { wanted = all }   // no display at all: bring everything back
     if wanted.isEmpty {                       // never leave the Mac with no display
         let others = all.filter { !isMain($0) }
@@ -385,8 +464,16 @@ func reconcile() {
     for id in all.sorted() {
         let should = wanted.contains(id), isOn = active.contains(id)
         if should && !isOn {
-            if setEnabled(id, true) { disabled.remove(id); saveDisabled(disabled); log("connected display \(id)") }
-            else { log("FAILED to connect display \(id)") }
+            if setEnabled(id, true) { disabled.remove(id); saveDisabled(disabled); connectFails[id] = nil; log("connected display \(id)") }
+            else {
+                // An id that macOS no longer knows (stale entry) must not be retried forever.
+                connectFails[id, default: 0] += 1
+                if connectFails[id]! <= 3 { log("FAILED to connect display \(id)") }
+                if connectFails[id]! >= 10, !displayList(active: false).contains(id) {
+                    log("display \(id) is gone: forgetting it")
+                    known[id] = nil; disabled.remove(id); saveDisabled(disabled); connectFails[id] = nil
+                }
+            }
         } else if !should && isOn {
             disabled.insert(id); saveDisabled(disabled)           // record first: crash-safe
             if setEnabled(id, false) { log("disconnected display \(id)") }
@@ -400,11 +487,16 @@ func reconcile() {
     // (the link needs a moment to come up), and for up to ~30 s until the monitor answers.
     if needMacInput > 0 {
         needMacInput -= 1
-        if setMonitorInput(cfg.monitor.mac_input) {
-            if !macInputSent { log("monitor input -> \(hex2(cfg.monitor.mac_input)) sent"); macInputSent = true }
-            needMacInput = min(needMacInput, 3)       // a few more times, then stop
+        // The command is not enough: a monitor asleep on the other input can ignore it. So the
+        // input is read back, and the command is repeated until the monitor says it shows the Mac's
+        // input (up to ~5 minutes, then it gives up).
+        let sent = setMonitorInput(cfg.monitor.mac_input)
+        if sent && !macInputSent { log("monitor input -> \(hex2(cfg.monitor.mac_input)) sent"); macInputSent = true }
+        if sent, fake("keyboards") != nil || monitorInput() == cfg.monitor.mac_input {
+            log("monitor input is \(hex2(cfg.monitor.mac_input)): confirmed")
+            needMacInput = 0
         } else if needMacInput == 0 {
-            log("FAILED to send the input \(hex2(cfg.monitor.mac_input)): the monitor is not reachable over DDC (is it connected to this Mac?)")
+            log("FAILED to switch the monitor to \(hex2(cfg.monitor.mac_input)): it did not confirm (asleep, or not connected to this Mac?)")
         }
     }
 }
@@ -449,6 +541,7 @@ case "run":
     }
     log("display-guard started")
     startUSBWatch()
+    startPCPowerWatch()
     let timer = Timer(timeInterval: cfg.pollInterval, repeats: true) { _ in reconcile() }
     RunLoop.main.add(timer, forMode: .common)
     reconcile()

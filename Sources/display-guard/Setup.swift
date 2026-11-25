@@ -222,7 +222,8 @@ func runSetup() {
         whenSunshine: conditions.contains(.sunshine),
         sunshineAddress: sunshineAddress,
         refreshOnUnlock: refresh.map { .init(vendor: $0.vendor, model: $0.model) },
-        pollInterval: poll, recheckDelayMs: recheck, refreshDelayMs: refreshDelay, refreshOffMs: refreshOff)
+        pollInterval: poll, recheckDelayMs: recheck, refreshDelayMs: refreshDelay, refreshOffMs: refreshOff,
+        pcPower: (try? Config.load())?.pcPower)   // keeps a hand-written [pc_power]
 
     do {
         try FileManager.default.createDirectory(at: path.deletingLastPathComponent(), withIntermediateDirectories: true)
