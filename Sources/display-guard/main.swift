@@ -117,9 +117,30 @@ func switchFor(_ id: CGDirectDisplayID) -> Config.InputSwitch? {
     return c.switches.first { $0.key == k }
 }
 
+// Displays on the refresh list are remembered on disk too: a monitor that macOS dropped from the
+// online list must still be known after a restart, or nothing can bring it back.
+let knownURL = FileManager.default.homeDirectoryForCurrentUser
+    .appendingPathComponent(".local/state/display-guard/known.json")
+
+func loadKnownRefresh() {
+    guard let data = try? Data(contentsOf: knownURL),
+          let m = try? JSONDecoder().decode([String: String].self, from: data) else { return }
+    for (k, v) in m { if let id = UInt32(k), known[id] == nil { known[id] = v } }
+}
+
+func saveKnownRefresh() {
+    guard let c = cfg else { return }
+    var m: [String: String] = [:]
+    for (id, v) in known where c.refreshOnUnlock.contains(where: { v == "\($0.vendor):\($0.model)" }) { m[String(id)] = v }
+    guard (try? JSONEncoder().encode(m)) != (try? Data(contentsOf: knownURL)) else { return }
+    try? FileManager.default.createDirectory(at: knownURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+    try? JSONEncoder().encode(m).write(to: knownURL)
+}
+
 func refreshKnown() {
     let online = displayList(active: false)
     for id in online { known[id] = "\(CGDisplayVendorNumber(id)):\(CGDisplayModelNumber(id))" }
+    saveKnownRefresh()
     // Forget displays that were unplugged (not online and not disabled by us).
     // A display on the refresh list is kept too: macOS can drop it from the online list by itself
     // (dark monitor after the lock), and enabling its id again is what brings it back.
@@ -133,9 +154,7 @@ func restoreAll() {
     for id in disabled {
         if setEnabled(id, true) { log("restored display \(id)") } else { log("FAILED to restore display \(id)") }
     }
-    // A stale id (macOS no longer knows it) can never be restored: forget it.
-    let online = displayList(active: false)
-    disabled = disabled.filter { !displayList(active: true).contains($0) && online.contains($0) }
+    disabled = disabled.filter { !displayList(active: true).contains($0) }
     saveDisabled(disabled)
 }
 
@@ -445,26 +464,31 @@ func refreshListedDisplays() {
     refreshKnown()
     for id in displayList(active: false).sorted() {
         guard let d = known[id], cfg.refreshOnUnlock.contains(where: { d == "\($0.vendor):\($0.model)" }) else { continue }
-        for round in 0..<cfg.refreshRepeat {
-            let active = displayList(active: true)
-            if fake("locked") != nil { log("(test) would refresh display \(id)"); continue }
-            // Also when it is the only active display (the main monitor often is not listed after the lock):
-            // that is when a dark screen hurts most. The Mac keeps running without a display for the
-            // off time, and the display is connected again at once, with retries.
-            if active.contains(id) {
-                if active.count < 2 { log("display \(id) is the only active one: refreshing it anyway") }
-                disabled.insert(id); saveDisabled(disabled)                    // record first: crash-safe
-                guard setEnabled(id, false) else { disabled.remove(id); saveDisabled(disabled); log("FAILED to disconnect display \(id) for the refresh"); continue }
-                usleep(useconds_t(cfg.refreshOffMs * 1000))
-            }
-            var back = false
-            for _ in 0..<5 { if setEnabled(id, true) { back = true; break }; usleep(1_000_000) }
-            if back { disabled.remove(id); saveDisabled(disabled); log("refreshed display \(id)") }
-            else { log("FAILED to connect display \(id) after the refresh") }
-            if round + 1 < cfg.refreshRepeat { sleep(3) }
-        }
-        if let sw = switchFor(id) { wantMacInputs([sw]) }
+        refreshDisplay(id)
     }
+}
+
+/// Disconnects and connects one display again, `refreshRepeat` times (also used by the menu).
+func refreshDisplay(_ id: CGDirectDisplayID) {
+    for round in 0..<cfg.refreshRepeat {
+        let active = displayList(active: true)
+        if fake("locked") != nil { log("(test) would refresh display \(id)"); continue }
+        // Also when it is the only active display (the main monitor often is not listed after the lock):
+        // that is when a dark screen hurts most. The Mac keeps running without a display for the
+        // off time, and the display is connected again at once, with retries.
+        if active.contains(id) {
+            if active.count < 2 { log("display \(id) is the only active one: refreshing it anyway") }
+            disabled.insert(id); saveDisabled(disabled)                    // record first: crash-safe
+            guard setEnabled(id, false) else { disabled.remove(id); saveDisabled(disabled); log("FAILED to disconnect display \(id) for the refresh"); continue }
+            usleep(useconds_t(cfg.refreshOffMs * 1000))
+        }
+        var back = false
+        for _ in 0..<5 { if setEnabled(id, true) { back = true; break }; usleep(1_000_000) }
+        if back { disabled.remove(id); saveDisabled(disabled); log("refreshed display \(id)") }
+        else { log("FAILED to connect display \(id) after the refresh") }
+        if round + 1 < cfg.refreshRepeat { sleep(3) }
+    }
+    if let sw = switchFor(id) { wantMacInputs([sw]) }
 }
 
 func reconcile() {
@@ -498,13 +522,8 @@ func reconcile() {
         if should && !isOn {
             if setEnabled(id, true) { disabled.remove(id); saveDisabled(disabled); connectFails[id] = nil; log("connected display \(id)") }
             else {
-                // An id that macOS no longer knows (stale entry) must not be retried forever.
                 connectFails[id, default: 0] += 1
-                if connectFails[id]! <= 3 { log("FAILED to connect display \(id)") }
-                if connectFails[id]! >= 10, !displayList(active: false).contains(id) {
-                    log("display \(id) is gone: forgetting it")
-                    known[id] = nil; disabled.remove(id); saveDisabled(disabled); connectFails[id] = nil
-                }
+                if connectFails[id]! <= 3 { log("FAILED to connect display \(id)") }   // not every poll
             }
         } else if !should && isOn {
             disabled.insert(id); saveDisabled(disabled)           // record first: crash-safe
@@ -565,6 +584,7 @@ case "uninstall":
     runUninstall()
 case "run":
     loadConfigOrExit()
+    loadKnownRefresh()
     restoreAll()                              // recover from a previous crash
     for sig in [SIGINT, SIGTERM, SIGHUP] { signal(sig, SIG_IGN) }
     var sources: [DispatchSourceSignal] = []
@@ -580,7 +600,7 @@ case "run":
     let timer = Timer(timeInterval: cfg.pollInterval, repeats: true) { _ in reconcile() }
     RunLoop.main.add(timer, forMode: .common)
     reconcile()
-    RunLoop.main.run()
+    runMenuBarApp()
 default:
     print("usage: display-guard [run|status|restore|setup|install|uninstall]")
     exit(2)

@@ -111,6 +111,10 @@ after      = "05:00"          # watch from this time (default 05:00)
 # interval_s = 3              # seconds between checks
 ```
 
+## Menu bar
+
+`run` stays in the menu bar (a display icon). Its menu reconnects the `refresh_on_unlock` monitors, or any known monitor one by one, by hand (disconnect, wait `refresh_off_ms`, connect; `refresh_repeat` times). "Quit" restores the disconnected displays and exits.
+
 ## License
 
 MIT
