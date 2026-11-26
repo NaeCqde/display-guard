@@ -485,7 +485,7 @@ func refreshDisplay(_ id: CGDirectDisplayID) {
         }
         var back = false
         for _ in 0..<5 { if setEnabled(id, true) { back = true; break }; usleep(1_000_000) }
-        if back { disabled.remove(id); saveDisabled(disabled); log("refreshed display \(id)") }
+        if back { disabled.remove(id); saveDisabled(disabled); connectFails[id] = nil; log("refreshed display \(id)") }
         else { log("FAILED to connect display \(id) after the refresh") }
         if round + 1 < cfg.refreshRepeat { sleep(3) }
     }
@@ -509,6 +509,7 @@ func reconcile() {
 
     let lockedNow = isLocked()
     if wasLocked && !lockedNow && !cfg.refreshOnUnlock.isEmpty {
+        connectFails = [:]                       // a new start after the unlock: no backoff
         log("unlocked: refreshing the listed displays in \(cfg.refreshDelayMs) ms")
         DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(cfg.refreshDelayMs)) { refreshListedDisplays() }
     }
@@ -518,6 +519,7 @@ func reconcile() {
     if reason != lastReason { log(reason); lastReason = reason }
 
     let active = Set(displayList(active: true))
+    for id in active { connectFails[id] = nil }          // it is up: forget old failures
     for id in all.sorted() {
         let should = wanted.contains(id), isOn = active.contains(id)
         if should && !isOn {
