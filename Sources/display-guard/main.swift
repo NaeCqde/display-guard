@@ -455,6 +455,7 @@ var pcTimer: DispatchSourceTimer?
 
 var lastReason = ""
 var connectFails: [CGDirectDisplayID: Int] = [:]
+var pollCount = 0
 var wasLocked = false
 
 /// A display that was connected again by us can stay dark after the unlock (the monitor does not
@@ -520,10 +521,15 @@ func reconcile() {
     for id in all.sorted() {
         let should = wanted.contains(id), isOn = active.contains(id)
         if should && !isOn {
+            // An id that keeps failing (a stale entry, or a monitor that is really gone) is tried only
+            // every ~30 s, so it costs neither log lines nor display reconfigurations.
+            pollCount += 1
+            if connectFails[id, default: 0] >= 10 && pollCount % 20 != 0 { continue }
             if setEnabled(id, true) { disabled.remove(id); saveDisabled(disabled); connectFails[id] = nil; log("connected display \(id)") }
             else {
                 connectFails[id, default: 0] += 1
                 if connectFails[id]! <= 3 { log("FAILED to connect display \(id)") }   // not every poll
+                if connectFails[id]! == 10 { log("display \(id) keeps failing: trying it only every ~30 s from now on") }
             }
         } else if !should && isOn {
             disabled.insert(id); saveDisabled(disabled)           // record first: crash-safe
