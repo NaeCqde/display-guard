@@ -54,6 +54,7 @@ macOS(Apple Silicon 専用)の常駐ツール。実際には使っていない�
 ## ビルドと常駐
 
 `swift build -c release`、`~/.local/bin/` に置く(外付けボリューム上のバイナリは launchd から起動すると止まることがある)。ログイン時の起動は `com.local.display-guard.plist.template`(`__HOME__` を置き換えて `~/Library/LaunchAgents/` へ)。
+ログは `~/Library/Logs/display-guard.log`(誰でも書き込める `/tmp` は、他のユーザーがシンボリックリンクを置けるので使わない)。
 
 ## 脆弱性として扱わないもの・前提
 
