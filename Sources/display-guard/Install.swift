@@ -21,8 +21,8 @@ private let plistTemplate = """
     <key>ProgramArguments</key><array><string>__PROGRAM__</string><string>run</string></array>
     <key>RunAtLoad</key><true/>
     <key>KeepAlive</key><true/>
-    <key>StandardOutPath</key><string>/tmp/display-guard.log</string>
-    <key>StandardErrorPath</key><string>/tmp/display-guard.log</string>
+    <key>StandardOutPath</key><string>__LOG__</string>
+    <key>StandardErrorPath</key><string>__LOG__</string>
 </dict>
 </plist>
 
@@ -30,6 +30,8 @@ private let plistTemplate = """
 
 private let home = FileManager.default.homeDirectoryForCurrentUser
 private let programURL = home.appendingPathComponent(".local/bin/display-guard")
+// Not /tmp: a world-writable directory lets another local user plant a symlink at the log path.
+private let logURL = home.appendingPathComponent("Library/Logs/display-guard.log")
 private let plistURL = home.appendingPathComponent("Library/LaunchAgents/\(label).plist")
 
 @discardableResult
@@ -76,7 +78,13 @@ func runInstall() {
             print(tr("\(programURL.path) にコピーしました。", "Copied to \(programURL.path)."))
         }
         try fm.createDirectory(at: plistURL.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try plistTemplate.replacingOccurrences(of: "__PROGRAM__", with: programURL.path)
+        try fm.createDirectory(at: logURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        func xml(_ t: String) -> String {
+            t.replacingOccurrences(of: "&", with: "&amp;").replacingOccurrences(of: "<", with: "&lt;")
+                .replacingOccurrences(of: ">", with: "&gt;")
+        }
+        try plistTemplate.replacingOccurrences(of: "__PROGRAM__", with: xml(programURL.path))
+            .replacingOccurrences(of: "__LOG__", with: xml(logURL.path))
             .write(to: plistURL, atomically: true, encoding: .utf8)
     } catch {
         print("display-guard: \(error)"); exit(1)
@@ -86,8 +94,8 @@ func runInstall() {
     guard r.status == 0 else {
         print("display-guard: launchctl bootstrap failed (\(r.status)): \(r.output)"); exit(1)
     }
-    print(tr("登録しました(\(plistURL.path))。ログイン時に起動し、止まっても再起動します。ログ: /tmp/display-guard.log",
-             "Registered (\(plistURL.path)). It starts at login and is restarted if it stops. Log: /tmp/display-guard.log"))
+    print(tr("登録しました(\(plistURL.path))。ログイン時に起動し、止まっても再起動します。ログ: \(logURL.path)",
+             "Registered (\(plistURL.path)). It starts at login and is restarted if it stops. Log: \(logURL.path)"))
 }
 
 func runUninstall() {

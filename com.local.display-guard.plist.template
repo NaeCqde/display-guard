@@ -6,7 +6,7 @@
     <key>ProgramArguments</key><array><string>__HOME__/.local/bin/display-guard</string><string>run</string></array>
     <key>RunAtLoad</key><true/>
     <key>KeepAlive</key><true/>
-    <key>StandardOutPath</key><string>/tmp/display-guard.log</string>
-    <key>StandardErrorPath</key><string>/tmp/display-guard.log</string>
+    <key>StandardOutPath</key><string>__HOME__/Library/Logs/display-guard.log</string>
+    <key>StandardErrorPath</key><string>__HOME__/Library/Logs/display-guard.log</string>
 </dict>
 </plist>
